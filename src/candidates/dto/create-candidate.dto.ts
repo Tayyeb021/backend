@@ -1,5 +1,12 @@
-import { IsString, IsNotEmpty, IsUUID, IsOptional, IsArray, IsEnum } from 'class-validator';
-import { CandidateStatus } from '../../entities/candidate.entity';
+import {
+  IsString,
+  IsNotEmpty,
+  IsUUID,
+  IsOptional,
+  IsArray,
+  IsEnum,
+} from 'class-validator';
+import { CandidateStatus } from '@prisma/client';
 
 export class CreateCandidateDto {
   @IsString()

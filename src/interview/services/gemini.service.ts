@@ -10,7 +10,10 @@ export class GeminiService {
     this.genAI = new GoogleGenerativeAI(apiKey);
   }
 
-  async generateInterviewQuestions(jobDescription: string, language: string = 'en'): Promise<string[]> {
+  async generateInterviewQuestions(
+    jobDescription: string,
+    language: string = 'en',
+  ): Promise<string[]> {
     const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
 
     const prompt = `Generate 5 interview questions for the following job description. 
@@ -25,17 +28,19 @@ export class GeminiService {
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const text = response.text();
-      
+
       // Parse questions from response
       const questions = text
         .split('\n')
-        .map(q => q.trim())
-        .filter(q => q.length > 0 && !q.match(/^\d+[\.\)]/))
+        .map((q) => q.trim())
+        .filter((q) => q.length > 0 && !q.match(/^\d+[\.\)]/))
         .slice(0, 5);
 
       return questions;
     } catch (error: any) {
-      throw new Error(`Failed to generate interview questions: ${error.message}`);
+      throw new Error(
+        `Failed to generate interview questions: ${error.message}`,
+      );
     }
   }
 
@@ -43,7 +48,7 @@ export class GeminiService {
     question: string,
     answer: string,
     jobDescription: string,
-    language: string = 'en'
+    language: string = 'en',
   ): Promise<{
     score: number;
     feedback: string;
@@ -71,9 +76,12 @@ export class GeminiService {
       const result = await model.generateContent(prompt);
       const response = await result.response;
       const text = response.text();
-      
+
       // Clean JSON response
-      const jsonText = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const jsonText = text
+        .replace(/```json\n?/g, '')
+        .replace(/```\n?/g, '')
+        .trim();
       const evaluation = JSON.parse(jsonText);
 
       return {
@@ -90,7 +98,7 @@ export class GeminiService {
   async generateInterviewSummary(
     transcript: string,
     scores: any,
-    language: string = 'en'
+    language: string = 'en',
   ): Promise<string> {
     const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
 

@@ -1,0 +1,229 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Company {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                String    @db.VarChar
+  tradeLicenseNumber  String?   @unique @db.VarChar
+  registrationNumber  String?   @unique @db.VarChar
+  vatTrn              String?   @unique @db.VarChar
+  corporateTaxTrn     String?   @unique @db.VarChar
+  freeZoneName        String?   @db.VarChar
+  licenseType         String?   @db.VarChar
+  licenseExpiryDate   DateTime? @db.Timestamp(6)
+  industry            String?   @db.VarChar
+  companySize         String?   @db.VarChar
+  website             String?   @db.VarChar
+  email               String    @db.VarChar
+  phone               String?   @db.VarChar
+  address             String?
+  poBox               String?   @db.VarChar
+  city                String?   @db.VarChar
+  emirate             String?   @db.VarChar
+  country             String?   @default("UAE") @db.VarChar
+  postalCode          String?   @db.VarChar
+  logoUrl             String?
+  description         String?
+  authorizedSignatory Json?
+  isActive            Boolean   @default(true)
+  createdAt           DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamp(6)
+  users               User[]
+
+  @@map("companies")
+}
+
+model User {
+  id         String          @id(map: "PK_a3ffb1c0c8416b9fc6f907b7433") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email      String          @unique(map: "IDX_USERS_EMAIL") @db.VarChar
+  password   String          @db.VarChar
+  firstName  String          @db.VarChar
+  lastName   String          @db.VarChar
+  phone      String?         @db.VarChar
+  role       UserRole @default(client)
+  isActive   Boolean         @default(true)
+  createdAt  DateTime        @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime        @default(now()) @updatedAt @db.Timestamp(6)
+  companyId  String?         @db.Uuid
+  clients    Client[]        @relation("ClientCreatedBy")
+  interviews Interview[]     @relation("InterviewClient")
+  jobs       Job[]           @relation("JobClient")
+  company    Company?        @relation(fields: [companyId], references: [id])
+
+  @@map("users")
+}
+
+model Job {
+  id              String           @id(map: "PK_cf0a6c42b72fcc7f7c237def345") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title           String           @db.VarChar
+  description     String
+  requiredSkills  String[]
+  experienceLevel String           @db.VarChar
+  location        String           @db.VarChar
+  salaryRange     String?          @db.VarChar
+  status          JobStatus @default(draft)
+  clientId        String           @db.Uuid
+  createdAt       DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime         @default(now()) @updatedAt @db.Timestamp(6)
+  candidates      Candidate[]
+  interviews      Interview[]
+  client          User             @relation("JobClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([clientId], map: "IDX_JOBS_CLIENT_ID")
+  @@index([status], map: "IDX_JOBS_STATUS")
+  @@map("jobs")
+}
+
+model Candidate {
+  id              String                 @id(map: "PK_140681296bf033ab1eb95288abb") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firstName       String                 @db.VarChar
+  lastName        String                 @db.VarChar
+  email           String                 @unique(map: "IDX_CANDIDATES_EMAIL") @db.VarChar
+  phone           String?                @db.VarChar
+  resumeUrl       String?
+  profileData     Json?
+  skills          String[]
+  experienceYears Int?
+  location        String?                @db.VarChar
+  sourcePlatform  String?                @db.VarChar
+  status          CandidateStatus @default(sourced)
+  jobId           String                 @db.Uuid
+  createdAt       DateTime               @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime               @default(now()) @updatedAt @db.Timestamp(6)
+  job             Job                    @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_426d378178da5713f1ab30daabc")
+  interviews      Interview[]
+
+  @@index([jobId], map: "IDX_CANDIDATES_JOB_ID")
+  @@index([status], map: "IDX_CANDIDATES_STATUS")
+  @@map("candidates")
+}
+
+model Interview {
+  id                       String                   @id(map: "PK_fd41af1f96d698fa33c2f070f47") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId              String                   @db.Uuid
+  jobId                    String                   @db.Uuid
+  clientId                 String                   @db.Uuid
+  status                   InterviewStatus   @default(scheduled)
+  language                 InterviewLanguage @default(en)
+  scheduledAt              DateTime?                @db.Timestamp(6)
+  startedAt                DateTime?                @db.Timestamp(6)
+  completedAt              DateTime?                @db.Timestamp(6)
+  dailyRoomId              String?                  @db.VarChar
+  videoUrl                 String?                  @db.VarChar
+  transcript               String?
+  transcriptWithTimestamps Json?
+  scores                   Json?
+  aiSummary                String?
+  createdAt                DateTime                 @default(now()) @db.Timestamp(6)
+  updatedAt                DateTime                 @default(now()) @updatedAt @db.Timestamp(6)
+  job                      Job                      @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_86c6a5b65c91b118189dc011aaa")
+  candidate                Candidate                @relation(fields: [candidateId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_9b47fb5a4e06ccb14d20d2f06fd")
+  client                   User                     @relation("InterviewClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([candidateId], map: "IDX_INTERVIEWS_CANDIDATE_ID")
+  @@index([clientId], map: "IDX_INTERVIEWS_CLIENT_ID")
+  @@index([jobId], map: "IDX_INTERVIEWS_JOB_ID")
+  @@index([status], map: "IDX_INTERVIEWS_STATUS")
+  @@map("interviews")
+}
+
+model Client {
+  id                        String              @id(map: "PK_f1ab7cf3a5714dbc6bb4e1c28a4") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  type                      ClientType
+  email                     String              @unique(map: "IDX_CLIENTS_EMAIL") @db.VarChar
+  phone                     String?             @db.VarChar
+  address                   String?
+  city                      String?             @db.VarChar
+  state                     String?             @db.VarChar
+  country                   String?             @db.VarChar
+  postalCode                String?             @db.VarChar
+  status                    ClientStatus @default(active)
+  notes                     String?
+  companyName               String?             @db.VarChar
+  companyRegistrationNumber String?             @db.VarChar
+  taxId                     String?             @db.VarChar
+  vatNumber                 String?             @db.VarChar
+  industry                  String?             @db.VarChar
+  companySize               String?             @db.VarChar
+  website                   String?             @db.VarChar
+  contactPersonFirstName    String?             @db.VarChar
+  contactPersonLastName     String?             @db.VarChar
+  contactPersonEmail        String?             @db.VarChar
+  contactPersonPhone        String?             @db.VarChar
+  contactPersonTitle        String?             @db.VarChar
+  firstName                 String?             @db.VarChar
+  lastName                  String?             @db.VarChar
+  dateOfBirth               DateTime?           @db.Timestamp(6)
+  nationalId                String?             @db.VarChar
+  passportNumber            String?             @db.VarChar
+  createdById               String?             @db.Uuid
+  createdAt                 DateTime            @default(now()) @db.Timestamp(6)
+  updatedAt                 DateTime            @default(now()) @updatedAt @db.Timestamp(6)
+  createdBy                 User?               @relation("ClientCreatedBy", fields: [createdById], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_d9da07105d53c46866e802f2590")
+
+  @@index([createdById], map: "IDX_CLIENTS_CREATED_BY")
+  @@index([status], map: "IDX_CLIENTS_STATUS")
+  @@index([type], map: "IDX_CLIENTS_TYPE")
+  @@map("clients")
+}
+
+model migrations {
+  id        Int    @id(map: "PK_8c82d7f526340ab734260ea46be") @default(autoincrement())
+  timestamp BigInt
+  name      String @db.VarChar
+}
+
+enum CandidateStatus {
+  sourced
+  contacted
+  interviewed
+  advanced
+  rejected
+}
+
+enum ClientStatus {
+  active
+  inactive
+  pending
+}
+
+enum ClientType {
+  company
+  individual
+}
+
+enum InterviewLanguage {
+  en
+  ar
+  hi
+  ur
+  bn
+}
+
+enum InterviewStatus {
+  scheduled
+  in_progress
+  completed
+  cancelled
+  missed
+}
+
+enum JobStatus {
+  draft
+  active
+  paused
+  closed
+}
+
+enum UserRole {
+  admin
+  recruiter
+  client
+  interviewee
+}

@@ -1,0 +1,17 @@
+{
+  "type": "individual",
+  "email": "jane.doe@example.com",
+  "phone": "+1-555-0456",
+  "address": "456 Personal Ave",
+  "city": "Los Angeles",
+  "state": "CA",
+  "country": "USA",
+  "postalCode": "90001",
+  "status": "active",
+  "firstName": "Jane",
+  "lastName": "Doe",
+  "dateOfBirth": "1990-05-15",
+  "nationalId": "NID-123456",
+  "passportNumber": "P1234567",
+  "notes": "Prefers phone communication"
+}

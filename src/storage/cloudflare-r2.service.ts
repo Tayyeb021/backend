@@ -1,5 +1,10 @@
 import { Injectable } from '@nestjs/common';
-import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+  ListObjectsV2Command,
+} from '@aws-sdk/client-s3';
 
 @Injectable()
 export class CloudflareR2Service {
@@ -67,7 +72,10 @@ export class CloudflareR2Service {
     }
   }
 
-  async mergeVideoChunks(interviewId: string, totalChunks: number): Promise<string> {
+  async mergeVideoChunks(
+    interviewId: string,
+    totalChunks: number,
+  ): Promise<string> {
     // In production, you'd use a video processing service to merge chunks
     // For MVP, we'll return the first chunk URL
     const key = `interviews/${interviewId}/chunks/0.webm`;

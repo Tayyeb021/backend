@@ -12,7 +12,7 @@ import {
 import { CandidatesService } from './candidates.service';
 import { CreateCandidateDto } from './dto/create-candidate.dto';
 import { UpdateCandidateDto } from './dto/update-candidate.dto';
-import { CandidateStatus } from '../entities/candidate.entity';
+import { CandidateStatus } from '@prisma/client';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('candidates')

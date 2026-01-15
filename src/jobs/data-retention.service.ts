@@ -1,15 +1,13 @@
 import { Injectable } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, LessThan, Not, IsNull } from 'typeorm';
-import { Interview } from '../../entities/interview.entity';
-import { CloudflareR2Service } from '../../storage/cloudflare-r2.service';
+import { Prisma } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
+import { CloudflareR2Service } from '../storage/cloudflare-r2.service';
 
 @Injectable()
 export class DataRetentionService {
   constructor(
-    @InjectRepository(Interview)
-    private interviewRepository: Repository<Interview>,
+    private prisma: PrismaService,
     private r2Service: CloudflareR2Service,
   ) {}
 
@@ -22,10 +20,10 @@ export class DataRetentionService {
 
     try {
       // Find interviews older than 90 days
-      const oldInterviews = await this.interviewRepository.find({
+      const oldInterviews = await this.prisma.interview.findMany({
         where: {
-          completedAt: LessThan(cutoffDate),
-          videoUrl: Not(IsNull()),
+          completedAt: { lt: cutoffDate },
+          videoUrl: { not: null },
         },
       });
 
@@ -42,20 +40,29 @@ export class DataRetentionService {
             await this.r2Service.deleteVideo(key);
 
             // Clear video URL from database
-            interview.videoUrl = null;
-            await this.interviewRepository.save(interview);
+            await this.prisma.interview.update({
+              where: { id: interview.id },
+              data: { videoUrl: null },
+            });
 
             console.log(`Deleted video for interview ${interview.id}`);
           } catch (error: any) {
-            console.error(`Failed to delete video for interview ${interview.id}:`, error);
+            console.error(
+              `Failed to delete video for interview ${interview.id}:`,
+              error,
+            );
           }
         }
 
         // Delete old transcripts (optional - keep summary)
         if (interview.transcript) {
-          interview.transcript = null;
-          interview.transcriptWithTimestamps = null;
-          await this.interviewRepository.save(interview);
+          await this.prisma.interview.update({
+            where: { id: interview.id },
+            data: {
+              transcript: null,
+              transcriptWithTimestamps: Prisma.JsonNull,
+            },
+          });
         }
       }
 

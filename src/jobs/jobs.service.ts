@@ -1,38 +1,34 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Job, JobStatus } from '../entities/job.entity';
+import { PrismaService } from '../prisma/prisma.service';
+import { Job, JobStatus } from '@prisma/client';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 
 @Injectable()
 export class JobsService {
-  constructor(
-    @InjectRepository(Job)
-    private jobRepository: Repository<Job>,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
-  async createJob(createJobDto: CreateJobDto, recruiterId: string): Promise<Job> {
-    const job = this.jobRepository.create({
-      ...createJobDto,
-      recruiterId,
+  async createJob(createJobDto: CreateJobDto, clientId: string): Promise<Job> {
+    return await this.prisma.job.create({
+      data: {
+        ...createJobDto,
+        clientId,
+      },
     });
-
-    return await this.jobRepository.save(job);
   }
 
-  async getJobsByRecruiter(recruiterId: string): Promise<Job[]> {
-    return await this.jobRepository.find({
-      where: { recruiterId },
-      relations: ['candidates'],
-      order: { createdAt: 'DESC' },
+  async getJobsByClient(clientId: string): Promise<Job[]> {
+    return await this.prisma.job.findMany({
+      where: { clientId },
+      include: { candidates: true },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
   async getJob(id: string): Promise<Job> {
-    const job = await this.jobRepository.findOne({
+    const job = await this.prisma.job.findUnique({
       where: { id },
-      relations: ['candidates', 'recruiter'],
+      include: { candidates: true, client: true },
     });
 
     if (!job) {
@@ -43,20 +39,22 @@ export class JobsService {
   }
 
   async updateJob(id: string, updateJobDto: UpdateJobDto): Promise<Job> {
-    const job = await this.jobRepository.findOne({ where: { id } });
-
-    if (!job) {
+    try {
+      return await this.prisma.job.update({
+        where: { id },
+        data: updateJobDto,
+      });
+    } catch (error) {
       throw new NotFoundException('Job not found');
     }
-
-    Object.assign(job, updateJobDto);
-    return await this.jobRepository.save(job);
   }
 
   async deleteJob(id: string): Promise<void> {
-    const result = await this.jobRepository.delete(id);
-
-    if (result.affected === 0) {
+    try {
+      await this.prisma.job.delete({
+        where: { id },
+      });
+    } catch (error) {
       throw new NotFoundException('Job not found');
     }
   }

@@ -1,0 +1,33 @@
+{
+  "email": "ahmed.hassan@techcorp.ae",
+  "password": "SecurePass123!",
+  "firstName": "Ahmed",
+  "lastName": "Hassan",
+  "company": {
+    "name": "TechCorp Middle East LLC",
+    "tradeLicenseNumber": "TL-123456789",
+    "registrationNumber": "DED-987654321",
+    "vatTrn": "100123456700003",
+    "corporateTaxTrn": "CT-123456789",
+    "freeZoneName": "Dubai Media City",
+    "licenseType": "Commercial",
+    "industry": "Technology",
+    "companySize": "50-100",
+    "website": "https://www.techcorp.ae",
+    "email": "info@techcorp.ae",
+    "phone": "+971-4-123-4567",
+    "address": "Building 15, Office 201, Dubai Media City",
+    "poBox": "12345",
+    "city": "Dubai",
+    "emirate": "Dubai",
+    "country": "UAE",
+    "postalCode": "12345",
+    "logoUrl": "https://example.com/logo.png",
+    "description": "Leading technology solutions provider in the Middle East",
+    "authorizedSignatory": {
+      "name": "Ahmed Hassan",
+      "emiratesId": "784-1985-1234567-1",
+      "position": "Managing Director"
+    }
+  }
+}

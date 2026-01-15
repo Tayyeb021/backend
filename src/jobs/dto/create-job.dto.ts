@@ -1,5 +1,11 @@
-import { IsString, IsNotEmpty, IsArray, IsOptional, IsEnum } from 'class-validator';
-import { JobStatus } from '../../entities/job.entity';
+import {
+  IsString,
+  IsNotEmpty,
+  IsArray,
+  IsOptional,
+  IsEnum,
+} from 'class-validator';
+import { JobStatus } from '@prisma/client';
 
 export class CreateJobDto {
   @IsString()

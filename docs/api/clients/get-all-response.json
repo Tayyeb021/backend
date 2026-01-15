@@ -1,0 +1,31 @@
+[
+  {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "type": "company",
+    "email": "contact@techcorp.com",
+    "companyName": "TechCorp Inc.",
+    "status": "active",
+    "createdAt": "2025-01-14T12:00:00.000Z",
+    "createdBy": {
+      "id": "user-uuid",
+      "email": "recruiter@example.com",
+      "firstName": "Recruiter",
+      "lastName": "Name"
+    }
+  },
+  {
+    "id": "660e8400-e29b-41d4-a716-446655440001",
+    "type": "individual",
+    "email": "jane.doe@example.com",
+    "firstName": "Jane",
+    "lastName": "Doe",
+    "status": "active",
+    "createdAt": "2025-01-14T11:00:00.000Z",
+    "createdBy": {
+      "id": "user-uuid",
+      "email": "recruiter@example.com",
+      "firstName": "Recruiter",
+      "lastName": "Name"
+    }
+  }
+]

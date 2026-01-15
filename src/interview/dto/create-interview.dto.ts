@@ -1,5 +1,5 @@
 import { IsUUID, IsEnum, IsDateString, IsOptional } from 'class-validator';
-import { InterviewLanguage } from '../entities/interview.entity';
+import { InterviewLanguage } from '@prisma/client';
 
 export class CreateInterviewDto {
   @IsUUID()

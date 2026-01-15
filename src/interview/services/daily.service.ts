@@ -32,7 +32,7 @@ export class DailyService {
             Authorization: `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
           },
-        }
+        },
       );
 
       return response.data;
@@ -41,10 +41,14 @@ export class DailyService {
     }
   }
 
-  async getRoomToken(roomName: string, userId: string, properties?: {
-    isOwner?: boolean;
-    exp?: number;
-  }): Promise<string> {
+  async getRoomToken(
+    roomName: string,
+    userId: string,
+    properties?: {
+      isOwner?: boolean;
+      exp?: number;
+    },
+  ): Promise<string> {
     try {
       const response = await axios.post(
         `${this.apiUrl}/meeting-tokens`,
@@ -52,7 +56,8 @@ export class DailyService {
           properties: {
             room_name: roomName,
             is_owner: properties?.isOwner || false,
-            exp: properties?.exp || Math.floor(Date.now() / 1000) + 60 * 60 * 24, // 24 hours
+            exp:
+              properties?.exp || Math.floor(Date.now() / 1000) + 60 * 60 * 24, // 24 hours
             user_id: userId,
           },
         },
@@ -61,7 +66,7 @@ export class DailyService {
             Authorization: `Bearer ${this.apiKey}`,
             'Content-Type': 'application/json',
           },
-        }
+        },
       );
 
       return response.data.token;
