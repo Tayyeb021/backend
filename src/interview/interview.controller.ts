@@ -42,7 +42,7 @@ export class InterviewController {
 
   @Get()
   async getInterviews(@Request() req) {
-    return this.interviewService.getInterviewsByRecruiter(req.user.id);
+    return this.interviewService.getInterviewsByClient(req.user.id);
   }
 
   @Patch(':id/start')
@@ -57,14 +57,22 @@ export class InterviewController {
   ) {
     const videoBuffer = Buffer.from(body.videoData, 'base64');
     return {
-      videoUrl: await this.interviewService.uploadVideoRecording(id, videoBuffer),
+      videoUrl: await this.interviewService.uploadVideoRecording(
+        id,
+        videoBuffer,
+      ),
     };
   }
 
   @Patch(':id/complete')
   async completeInterview(
     @Param('id') id: string,
-    @Body() body: { transcript: string; transcriptWithTimestamps: any[]; videoUrl?: string },
+    @Body()
+    body: {
+      transcript: string;
+      transcriptWithTimestamps: any[];
+      videoUrl?: string;
+    },
   ) {
     return this.interviewService.completeInterview(
       id,

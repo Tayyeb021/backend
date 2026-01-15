@@ -56,13 +56,14 @@ export class ProxycurlService {
 
     const startDate = new Date(
       firstJob.starts_at?.year || 0,
-      firstJob.starts_at?.month || 0
+      firstJob.starts_at?.month || 0,
     );
     const endDate = lastJob.ends_at
       ? new Date(lastJob.ends_at.year || 0, lastJob.ends_at.month || 0)
       : new Date();
 
-    const years = (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24 * 365);
+    const years =
+      (endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24 * 365);
     return Math.round(years);
   }
 }

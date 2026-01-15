@@ -1,34 +1,33 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Candidate, CandidateStatus } from '../entities/candidate.entity';
+import { PrismaService } from '../prisma/prisma.service';
+import { Candidate, CandidateStatus } from '@prisma/client';
 import { CreateCandidateDto } from './dto/create-candidate.dto';
 import { UpdateCandidateDto } from './dto/update-candidate.dto';
 
 @Injectable()
 export class CandidatesService {
-  constructor(
-    @InjectRepository(Candidate)
-    private candidateRepository: Repository<Candidate>,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
-  async createCandidate(createCandidateDto: CreateCandidateDto): Promise<Candidate> {
-    const candidate = this.candidateRepository.create(createCandidateDto);
-    return await this.candidateRepository.save(candidate);
+  async createCandidate(
+    createCandidateDto: CreateCandidateDto,
+  ): Promise<Candidate> {
+    return await this.prisma.candidate.create({
+      data: createCandidateDto,
+    });
   }
 
   async getCandidatesByJob(jobId: string): Promise<Candidate[]> {
-    return await this.candidateRepository.find({
+    return await this.prisma.candidate.findMany({
       where: { jobId },
-      relations: ['interviews', 'job'],
-      order: { createdAt: 'DESC' },
+      include: { interviews: true, job: true },
+      orderBy: { createdAt: 'desc' },
     });
   }
 
   async getCandidate(id: string): Promise<Candidate> {
-    const candidate = await this.candidateRepository.findOne({
+    const candidate = await this.prisma.candidate.findUnique({
       where: { id },
-      relations: ['interviews', 'job'],
+      include: { interviews: true, job: true },
     });
 
     if (!candidate) {
@@ -42,24 +41,27 @@ export class CandidatesService {
     id: string,
     status: CandidateStatus,
   ): Promise<Candidate> {
-    const candidate = await this.candidateRepository.findOne({ where: { id } });
-
-    if (!candidate) {
+    try {
+      return await this.prisma.candidate.update({
+        where: { id },
+        data: { status },
+      });
+    } catch (error) {
       throw new NotFoundException('Candidate not found');
     }
-
-    candidate.status = status;
-    return await this.candidateRepository.save(candidate);
   }
 
-  async updateCandidate(id: string, updateCandidateDto: UpdateCandidateDto): Promise<Candidate> {
-    const candidate = await this.candidateRepository.findOne({ where: { id } });
-
-    if (!candidate) {
+  async updateCandidate(
+    id: string,
+    updateCandidateDto: UpdateCandidateDto,
+  ): Promise<Candidate> {
+    try {
+      return await this.prisma.candidate.update({
+        where: { id },
+        data: updateCandidateDto,
+      });
+    } catch (error) {
       throw new NotFoundException('Candidate not found');
     }
-
-    Object.assign(candidate, updateCandidateDto);
-    return await this.candidateRepository.save(candidate);
   }
 }

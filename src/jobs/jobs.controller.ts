@@ -26,7 +26,7 @@ export class JobsController {
 
   @Get()
   async getJobs(@Request() req) {
-    return this.jobsService.getJobsByRecruiter(req.user.id);
+    return this.jobsService.getJobsByClient(req.user.id);
   }
 
   @Get(':id')

@@ -1,0 +1,14 @@
+{
+  "email": "sara.ali@startup.ae",
+  "password": "SecurePass123!",
+  "firstName": "Sara",
+  "lastName": "Ali",
+  "company": {
+    "name": "Startup Solutions FZE",
+    "email": "contact@startup.ae",
+    "phone": "+971-4-987-6543",
+    "city": "Dubai",
+    "emirate": "Dubai",
+    "country": "UAE"
+  }
+}

@@ -1,12 +1,15 @@
 import { Injectable } from '@nestjs/common';
-import * as sgMail from '@sendgrid/mail';
 
 @Injectable()
 export class EmailService {
+  private readonly sendgrid: any;
+
   constructor() {
+    // Use require for SendGrid to ensure compatibility with v8
+    this.sendgrid = require('@sendgrid/mail');
     const apiKey = process.env.SENDGRID_API_KEY || '';
     if (apiKey) {
-      sgMail.setApiKey(apiKey);
+      this.sendgrid.setApiKey(apiKey);
     }
   }
 
@@ -38,7 +41,7 @@ export class EmailService {
     };
 
     try {
-      await sgMail.send(msg);
+      await this.sendgrid.send(msg);
     } catch (error: any) {
       console.error('Failed to send email:', error);
       throw new Error(`Failed to send email: ${error.message}`);

@@ -1,0 +1,7 @@
+{
+  "email": "candidate@example.com",
+  "password": "SecurePass123!",
+  "firstName": "John",
+  "lastName": "Doe",
+  "role": "interviewee"
+}

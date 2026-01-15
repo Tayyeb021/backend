@@ -2,25 +2,54 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  BadRequestException,
+  NotFoundException,
 } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { User, UserRole } from '../entities/user.entity';
+import { PrismaService } from '../prisma/prisma.service';
+import { User, UserRole, Prisma } from '@prisma/client';
 import { RegisterDto } from './dto/register.dto';
+import { RegisterAdminDto } from './dto/register-admin.dto';
 import { LoginDto } from './dto/login.dto';
+
+type UserWithCompany = Prisma.UserGetPayload<{
+  include: { company: true };
+}>;
+
+type UserWithCompleteInfo = Prisma.UserGetPayload<{
+  include: {
+    company: true;
+    jobs: {
+      include: {
+        candidates: true;
+      };
+    };
+    interviews: {
+      include: {
+        candidate: true;
+        job: true;
+      };
+    };
+    clients: true;
+  };
+}>;
 
 @Injectable()
 export class AuthService {
   constructor(
-    @InjectRepository(User)
-    private userRepository: Repository<User>,
+    private prisma: PrismaService,
     private jwtService: JwtService,
   ) {}
 
-  async register(registerDto: RegisterDto): Promise<{ user: User; token: string }> {
-    const existingUser = await this.userRepository.findOne({
+  async register(registerDto: RegisterDto): Promise<{
+    user: Omit<UserWithCompany, 'password'>;
+    token: {
+      accessToken: string;
+      refreshToken: string;
+    };
+  }> {
+    const existingUser = await this.prisma.user.findUnique({
       where: { email: registerDto.email },
     });
 
@@ -28,24 +57,125 @@ export class AuthService {
       throw new ConflictException('User with this email already exists');
     }
 
+    // Validate role - only allow client or interviewee
+    const role = registerDto.role || UserRole.client;
+    if (role !== UserRole.client && role !== UserRole.interviewee) {
+      throw new BadRequestException(
+        'Role must be either client or interviewee',
+      );
+    }
+
+    // Validate that company is only provided for client role
+    if (registerDto.company && role !== UserRole.client) {
+      throw new BadRequestException(
+        'Company information can only be provided for client role',
+      );
+    }
+
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
 
-    const user = this.userRepository.create({
-      ...registerDto,
-      password: hashedPassword,
-      role: UserRole.RECRUITER,
+    // Extract company data if provided
+    const { company, role: _, ...userData } = registerDto;
+    let companyId: string | undefined;
+
+    // Create company if company information is provided (only for client role)
+    if (company && role === UserRole.client) {
+      // Check if company with same email or trade license already exists
+      if (company.tradeLicenseNumber) {
+        const existingCompany = await this.prisma.company.findUnique({
+          where: { tradeLicenseNumber: company.tradeLicenseNumber },
+        });
+        if (existingCompany) {
+          throw new ConflictException(
+            'Company with this trade license number already exists',
+          );
+        }
+      }
+
+      const createdCompany = await this.prisma.company.create({
+        data: {
+          ...company,
+          country: company.country || 'UAE',
+          emirate: company.emirate || undefined,
+        },
+      });
+      companyId = createdCompany.id;
+    }
+
+    const user = await this.prisma.user.create({
+      data: {
+        ...userData,
+        password: hashedPassword,
+        role,
+        companyId,
+      },
+      include: {
+        company: true,
+      },
     });
 
-    await this.userRepository.save(user);
+    const tokens = this.generateTokens(user);
 
-    const token = this.generateToken(user);
-
-    return { user: this.sanitizeUser(user), token };
+    return {
+      user: this.sanitizeUser(user),
+      token: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      },
+    };
   }
 
-  async login(loginDto: LoginDto): Promise<{ user: User; token: string }> {
-    const user = await this.userRepository.findOne({
+  async registerAdmin(registerAdminDto: RegisterAdminDto): Promise<{
+    user: Omit<User, 'password'>;
+    token: {
+      accessToken: string;
+      refreshToken: string;
+    };
+  }> {
+    const existingUser = await this.prisma.user.findUnique({
+      where: { email: registerAdminDto.email },
+    });
+
+    if (existingUser) {
+      throw new ConflictException('User with this email already exists');
+    }
+
+    const hashedPassword = await bcrypt.hash(registerAdminDto.password, 10);
+
+    const user = await this.prisma.user.create({
+      data: {
+        ...registerAdminDto,
+        password: hashedPassword,
+        role: UserRole.admin,
+      },
+      include: {
+        company: true,
+      },
+    });
+
+    const tokens = this.generateTokens(user);
+
+    return {
+      user: this.sanitizeUser(user),
+      token: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      },
+    };
+  }
+
+  async login(loginDto: LoginDto): Promise<{
+    user: Omit<UserWithCompany, 'password'>;
+    token: {
+      accessToken: string;
+      refreshToken: string;
+    };
+  }> {
+    const user = await this.prisma.user.findUnique({
       where: { email: loginDto.email },
+      include: {
+        company: true,
+      },
     });
 
     if (!user || !(await bcrypt.compare(loginDto.password, user.password))) {
@@ -56,14 +186,25 @@ export class AuthService {
       throw new UnauthorizedException('Account is inactive');
     }
 
-    const token = this.generateToken(user);
+    const tokens = this.generateTokens(user);
 
-    return { user: this.sanitizeUser(user), token };
+    return {
+      user: this.sanitizeUser(user),
+      token: {
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+      },
+    };
   }
 
-  async validateUser(userId: string): Promise<User> {
-    const user = await this.userRepository.findOne({
+  async validateUser(
+    userId: string,
+  ): Promise<Omit<UserWithCompany, 'password'>> {
+    const user = await this.prisma.user.findFirst({
       where: { id: userId, isActive: true },
+      include: {
+        company: true,
+      },
     });
 
     if (!user) {
@@ -73,13 +214,136 @@ export class AuthService {
     return this.sanitizeUser(user);
   }
 
-  private generateToken(user: User): string {
-    const payload = { sub: user.id, email: user.email, role: user.role };
-    return this.jwtService.sign(payload);
+  async getUserProfile(userId: string): Promise<Omit<UserWithCompleteInfo, 'password'>> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId, isActive: true },
+      include: {
+        company: true,
+        jobs: {
+          include: {
+            candidates: true,
+          },
+        },
+        interviews: {
+          include: {
+            candidate: true,
+            job: true,
+          },
+        },
+        clients: true,
+      },
+    });
+
+    if (!user) {
+      throw new UnauthorizedException('User not found or inactive');
+    }
+
+    const { password, ...sanitized } = user;
+    return sanitized;
   }
 
-  private sanitizeUser(user: User): User {
+  async getUserById(userId: string): Promise<Omit<UserWithCompleteInfo, 'password'>> {
+    const user = await this.prisma.user.findFirst({
+      where: { id: userId },
+      include: {
+        company: true,
+        jobs: {
+          include: {
+            candidates: true,
+          },
+        },
+        interviews: {
+          include: {
+            candidate: true,
+            job: true,
+          },
+        },
+        clients: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
     const { password, ...sanitized } = user;
-    return sanitized as User;
+    return sanitized;
+  }
+
+  async getUserByEmail(email: string): Promise<Omit<UserWithCompleteInfo, 'password'>> {
+    const user = await this.prisma.user.findFirst({
+      where: { email },
+      include: {
+        company: true,
+        jobs: {
+          include: {
+            candidates: true,
+          },
+        },
+        interviews: {
+          include: {
+            candidate: true,
+            job: true,
+          },
+        },
+        clients: true,
+      },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const { password, ...sanitized } = user;
+    return sanitized;
+  }
+
+  private generateTokens(user: User | UserWithCompany): {
+    accessToken: string;
+    refreshToken: string;
+  } {
+    const payload = { sub: user.id, email: user.email, role: user.role };
+
+    // Access token expires in 15 minutes
+    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+
+    // Refresh token expires in 7 days
+    const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
+
+    return { accessToken, refreshToken };
+  }
+
+  async refreshAccessToken(
+    refreshToken: string,
+  ): Promise<{ accessToken: string }> {
+    try {
+      const payload = this.jwtService.verify(refreshToken);
+      const user = await this.prisma.user.findFirst({
+        where: { id: payload.sub, isActive: true },
+        include: {
+          company: true,
+        },
+      });
+
+      if (!user) {
+        throw new UnauthorizedException('User not found or inactive');
+      }
+
+      const newPayload = { sub: user.id, email: user.email, role: user.role };
+      const accessToken = this.jwtService.sign(newPayload, {
+        expiresIn: '15m',
+      });
+
+      return { accessToken };
+    } catch (error) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+  }
+
+  private sanitizeUser(
+    user: UserWithCompany | UserWithCompleteInfo,
+  ): Omit<UserWithCompany | UserWithCompleteInfo, 'password'> {
+    const { password, ...sanitized } = user;
+    return sanitized;
   }
 }

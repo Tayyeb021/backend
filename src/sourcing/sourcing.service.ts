@@ -1,8 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Candidate, CandidateStatus } from '../entities/candidate.entity';
-import { Job } from '../entities/job.entity';
+import { PrismaService } from '../prisma/prisma.service';
+import { Candidate, CandidateStatus } from '@prisma/client';
 import { ProxycurlService } from './services/proxycurl.service';
 import { ScraperService } from './services/scraper.service';
 import { MatchingService } from './services/matching.service';
@@ -11,23 +9,24 @@ import { EmailService } from '../email/email.service';
 @Injectable()
 export class SourcingService {
   constructor(
-    @InjectRepository(Candidate)
-    private candidateRepository: Repository<Candidate>,
-    @InjectRepository(Job)
-    private jobRepository: Repository<Job>,
+    private prisma: PrismaService,
     private proxycurlService: ProxycurlService,
     private scraperService: ScraperService,
     private matchingService: MatchingService,
     private emailService: EmailService,
   ) {}
 
-  async sourceFromLinkedIn(profileUrl: string, jobId: string): Promise<Candidate> {
-    const job = await this.jobRepository.findOne({ where: { id: jobId } });
+  async sourceFromLinkedIn(
+    profileUrl: string,
+    jobId: string,
+  ): Promise<Candidate> {
+    const job = await this.prisma.job.findUnique({ where: { id: jobId } });
     if (!job) {
       throw new Error('Job not found');
     }
 
-    const profileData = await this.proxycurlService.getLinkedInProfile(profileUrl);
+    const profileData =
+      await this.proxycurlService.getLinkedInProfile(profileUrl);
     const matchScore = this.matchingService.calculateMatchScore(
       profileData.skills || [],
       job,
@@ -37,13 +36,13 @@ export class SourcingService {
       throw new Error(`Match score ${matchScore}% is below threshold`);
     }
 
-    const candidate = this.candidateRepository.create({
-      ...profileData,
-      jobId,
-      status: CandidateStatus.SOURCED,
+    const savedCandidate = await this.prisma.candidate.create({
+      data: {
+        ...profileData,
+        jobId,
+        status: CandidateStatus.sourced,
+      },
     });
-
-    const savedCandidate = await this.candidateRepository.save(candidate);
 
     // Send outreach email
     if (savedCandidate.email) {
@@ -52,15 +51,17 @@ export class SourcingService {
         savedCandidate.firstName,
         job.title,
       );
-      savedCandidate.status = CandidateStatus.CONTACTED;
-      await this.candidateRepository.save(savedCandidate);
+      return await this.prisma.candidate.update({
+        where: { id: savedCandidate.id },
+        data: { status: CandidateStatus.contacted },
+      });
     }
 
     return savedCandidate;
   }
 
   async sourceFromBayt(profileUrl: string, jobId: string): Promise<Candidate> {
-    const job = await this.jobRepository.findOne({ where: { id: jobId } });
+    const job = await this.prisma.job.findUnique({ where: { id: jobId } });
     if (!job) {
       throw new Error('Job not found');
     }
@@ -75,22 +76,26 @@ export class SourcingService {
       throw new Error(`Match score ${matchScore}% is below threshold`);
     }
 
-    const candidate = this.candidateRepository.create({
-      ...profileData,
-      jobId,
-      status: CandidateStatus.SOURCED,
+    return await this.prisma.candidate.create({
+      data: {
+        ...profileData,
+        jobId,
+        status: CandidateStatus.sourced,
+      },
     });
-
-    return await this.candidateRepository.save(candidate);
   }
 
-  async sourceFromNaukriGulf(profileUrl: string, jobId: string): Promise<Candidate> {
-    const job = await this.jobRepository.findOne({ where: { id: jobId } });
+  async sourceFromNaukriGulf(
+    profileUrl: string,
+    jobId: string,
+  ): Promise<Candidate> {
+    const job = await this.prisma.job.findUnique({ where: { id: jobId } });
     if (!job) {
       throw new Error('Job not found');
     }
 
-    const profileData = await this.scraperService.scrapeNaukriGulfProfile(profileUrl);
+    const profileData =
+      await this.scraperService.scrapeNaukriGulfProfile(profileUrl);
     const matchScore = this.matchingService.calculateMatchScore(
       profileData.skills || [],
       job,
@@ -100,12 +105,12 @@ export class SourcingService {
       throw new Error(`Match score ${matchScore}% is below threshold`);
     }
 
-    const candidate = this.candidateRepository.create({
-      ...profileData,
-      jobId,
-      status: CandidateStatus.SOURCED,
+    return await this.prisma.candidate.create({
+      data: {
+        ...profileData,
+        jobId,
+        status: CandidateStatus.sourced,
+      },
     });
-
-    return await this.candidateRepository.save(candidate);
   }
 }

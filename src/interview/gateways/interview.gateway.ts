@@ -14,16 +14,22 @@ import { GeminiRealtimeService } from '../services/gemini-realtime.service';
 
 @Injectable()
 @WebSocketGateway({
+  transport: ['websocket'],
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     credentials: true,
   },
 })
-export class InterviewGateway implements OnGatewayConnection, OnGatewayDisconnect {
+export class InterviewGateway
+  implements OnGatewayConnection, OnGatewayDisconnect
+{
   @WebSocketServer()
   server: Server;
 
-  private activeInterviews = new Map<string, { socket: Socket; geminiSession: any }>();
+  private activeInterviews = new Map<
+    string,
+    { socket: Socket; geminiSession: any }
+  >();
 
   constructor(
     private jwtService: JwtService,
@@ -42,7 +48,9 @@ export class InterviewGateway implements OnGatewayConnection, OnGatewayDisconnec
       client.data.userId = payload.sub;
       client.data.interviewId = client.handshake.query.interviewId as string;
 
-      console.log(`Client connected: ${client.data.userId} for interview ${client.data.interviewId}`);
+      console.log(
+        `Client connected: ${client.data.userId} for interview ${client.data.interviewId}`,
+      );
     } catch (error) {
       console.error('WebSocket connection error:', error);
       client.disconnect();
@@ -72,8 +80,10 @@ export class InterviewGateway implements OnGatewayConnection, OnGatewayDisconnec
         (transcript) => {
           // Send transcript to client
           client.emit('transcript', transcript);
-          // Broadcast to recruiter if connected
-          this.server.to(`recruiter-${data.interviewId}`).emit('transcript', transcript);
+          // Broadcast to client if connected
+          this.server
+            .to(`client-${data.interviewId}`)
+            .emit('transcript', transcript);
         },
         (audioChunk) => {
           // Send AI audio response to client
@@ -100,7 +110,10 @@ export class InterviewGateway implements OnGatewayConnection, OnGatewayDisconnec
     try {
       const session = this.activeInterviews.get(data.interviewId);
       if (session?.geminiSession) {
-        await this.geminiRealtimeService.sendAudio(session.geminiSession, data.audio);
+        await this.geminiRealtimeService.sendAudio(
+          session.geminiSession,
+          data.audio,
+        );
       }
     } catch (error: any) {
       client.emit('error', { message: error.message });

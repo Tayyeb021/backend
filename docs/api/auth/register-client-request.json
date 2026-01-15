@@ -1,0 +1,16 @@
+{
+  "email": "ahmed.hassan@techcorp.ae",
+  "password": "SecurePass123!",
+  "firstName": "Ahmed",
+  "lastName": "Hassan",
+  "role": "client",
+  "company": {
+    "name": "TechCorp Middle East LLC",
+    "tradeLicenseNumber": "TL-123456789",
+    "email": "info@techcorp.ae",
+    "phone": "+971-4-123-4567",
+    "city": "Dubai",
+    "emirate": "Dubai",
+    "country": "UAE"
+  }
+}

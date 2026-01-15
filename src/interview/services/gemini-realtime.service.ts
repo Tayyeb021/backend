@@ -4,14 +4,19 @@ import axios from 'axios';
 interface GeminiRealtimeSession {
   sessionId: string;
   ws: WebSocket;
-  onTranscript: (transcript: { text: string; timestamp: number; language: string }) => void;
+  onTranscript: (transcript: {
+    text: string;
+    timestamp: number;
+    language: string;
+  }) => void;
   onAudioResponse: (audioChunk: ArrayBuffer) => void;
 }
 
 @Injectable()
 export class GeminiRealtimeService {
   private readonly apiKey: string;
-  private readonly apiUrl: string = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:streamGenerateContent';
+  private readonly apiUrl: string =
+    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:streamGenerateContent';
 
   constructor() {
     this.apiKey = process.env.GEMINI_API_KEY || '';
@@ -19,12 +24,16 @@ export class GeminiRealtimeService {
 
   async createSession(
     language: string,
-    onTranscript: (transcript: { text: string; timestamp: number; language: string }) => void,
+    onTranscript: (transcript: {
+      text: string;
+      timestamp: number;
+      language: string;
+    }) => void,
     onAudioResponse: (audioChunk: ArrayBuffer) => void,
   ): Promise<GeminiRealtimeSession> {
     // Note: Gemini Realtime API uses WebSocket-like streaming
     // For MVP, we'll use the streaming API with Server-Sent Events or implement WebSocket proxy
-    
+
     // Create a session token
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -69,7 +78,10 @@ export class GeminiRealtimeService {
     console.log('Starting Gemini streaming session:', session.sessionId);
   }
 
-  async sendAudio(session: GeminiRealtimeSession, audioChunk: ArrayBuffer): Promise<void> {
+  async sendAudio(
+    session: GeminiRealtimeSession,
+    audioChunk: ArrayBuffer,
+  ): Promise<void> {
     try {
       // Convert audio chunk to base64
       const base64Audio = Buffer.from(audioChunk).toString('base64');
@@ -122,7 +134,10 @@ export class GeminiRealtimeService {
     }
   }
 
-  private processGeminiResponse(response: any, session: GeminiRealtimeSession): void {
+  private processGeminiResponse(
+    response: any,
+    session: GeminiRealtimeSession,
+  ): void {
     if (response.candidates && response.candidates.length > 0) {
       const candidate = response.candidates[0];
 

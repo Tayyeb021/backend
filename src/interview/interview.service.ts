@@ -1,10 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Interview, InterviewStatus, InterviewLanguage } from '../entities/interview.entity';
-import { Candidate } from '../entities/candidate.entity';
-import { Job } from '../entities/job.entity';
-import { User } from '../entities/user.entity';
+import { PrismaService } from '../prisma/prisma.service';
+import { Interview, InterviewStatus, InterviewLanguage } from '@prisma/client';
 import { DailyService } from './services/daily.service';
 import { GeminiService } from './services/gemini.service';
 import { CloudflareR2Service } from '../storage/cloudflare-r2.service';
@@ -13,12 +9,7 @@ import { CreateInterviewDto } from './dto/create-interview.dto';
 @Injectable()
 export class InterviewService {
   constructor(
-    @InjectRepository(Interview)
-    private interviewRepository: Repository<Interview>,
-    @InjectRepository(Candidate)
-    private candidateRepository: Repository<Candidate>,
-    @InjectRepository(Job)
-    private jobRepository: Repository<Job>,
+    private prisma: PrismaService,
     private dailyService: DailyService,
     private geminiService: GeminiService,
     private r2Service: CloudflareR2Service,
@@ -26,9 +17,9 @@ export class InterviewService {
 
   async createInterview(
     createInterviewDto: CreateInterviewDto,
-    recruiterId: string,
+    clientId: string,
   ): Promise<Interview> {
-    const candidate = await this.candidateRepository.findOne({
+    const candidate = await this.prisma.candidate.findUnique({
       where: { id: createInterviewDto.candidateId },
     });
 
@@ -36,7 +27,7 @@ export class InterviewService {
       throw new NotFoundException('Candidate not found');
     }
 
-    const job = await this.jobRepository.findOne({
+    const job = await this.prisma.job.findUnique({
       where: { id: createInterviewDto.jobId },
     });
 
@@ -56,18 +47,21 @@ export class InterviewService {
       createInterviewDto.language,
     );
 
-    const interview = this.interviewRepository.create({
-      ...createInterviewDto,
-      recruiterId,
-      dailyRoomId: room.name,
-      status: InterviewStatus.SCHEDULED,
+    return await this.prisma.interview.create({
+      data: {
+        ...createInterviewDto,
+        clientId,
+        dailyRoomId: room.name,
+        status: InterviewStatus.scheduled,
+      },
     });
-
-    return await this.interviewRepository.save(interview);
   }
 
-  async getInterviewToken(interviewId: string, userId: string): Promise<string> {
-    const interview = await this.interviewRepository.findOne({
+  async getInterviewToken(
+    interviewId: string,
+    userId: string,
+  ): Promise<string> {
+    const interview = await this.prisma.interview.findUnique({
       where: { id: interviewId },
     });
 
@@ -75,32 +69,35 @@ export class InterviewService {
       throw new NotFoundException('Interview not found');
     }
 
-    const isOwner = interview.recruiterId === userId;
+    if (!interview.dailyRoomId) {
+      throw new NotFoundException('Interview room not found');
+    }
+
+    const isOwner = interview.clientId === userId;
     return await this.dailyService.getRoomToken(interview.dailyRoomId, userId, {
       isOwner,
     });
   }
 
   async startInterview(interviewId: string): Promise<Interview> {
-    const interview = await this.interviewRepository.findOne({
-      where: { id: interviewId },
-    });
-
-    if (!interview) {
+    try {
+      return await this.prisma.interview.update({
+        where: { id: interviewId },
+        data: {
+          status: InterviewStatus.in_progress,
+          startedAt: new Date(),
+        },
+      });
+    } catch (error) {
       throw new NotFoundException('Interview not found');
     }
-
-    interview.status = InterviewStatus.IN_PROGRESS;
-    interview.startedAt = new Date();
-
-    return await this.interviewRepository.save(interview);
   }
 
   async uploadVideoRecording(
     interviewId: string,
     videoBuffer: Buffer,
   ): Promise<string> {
-    const interview = await this.interviewRepository.findOne({
+    const interview = await this.prisma.interview.findUnique({
       where: { id: interviewId },
     });
 
@@ -109,8 +106,10 @@ export class InterviewService {
     }
 
     const videoUrl = await this.r2Service.uploadVideo(interviewId, videoBuffer);
-    interview.videoUrl = videoUrl;
-    await this.interviewRepository.save(interview);
+    await this.prisma.interview.update({
+      where: { id: interviewId },
+      data: { videoUrl },
+    });
 
     return videoUrl;
   }
@@ -121,20 +120,14 @@ export class InterviewService {
     transcriptWithTimestamps: any[],
     videoUrl?: string,
   ): Promise<Interview> {
-    const interview = await this.interviewRepository.findOne({
+    const interview = await this.prisma.interview.findUnique({
       where: { id: interviewId },
-      relations: ['job', 'candidate'],
+      include: { job: true, candidate: true },
     });
 
     if (!interview) {
       throw new NotFoundException('Interview not found');
     }
-
-    interview.status = InterviewStatus.COMPLETED;
-    interview.completedAt = new Date();
-    interview.transcript = transcript;
-    interview.transcriptWithTimestamps = transcriptWithTimestamps;
-    interview.videoUrl = videoUrl;
 
     // Calculate scores (simplified - would use Gemini to evaluate)
     const scores = {
@@ -144,8 +137,6 @@ export class InterviewService {
       overall: 75,
     };
 
-    interview.scores = scores;
-
     // Generate AI summary
     const summary = await this.geminiService.generateInterviewSummary(
       transcript,
@@ -153,15 +144,24 @@ export class InterviewService {
       interview.language,
     );
 
-    interview.aiSummary = summary;
-
-    return await this.interviewRepository.save(interview);
+    return await this.prisma.interview.update({
+      where: { id: interviewId },
+      data: {
+        status: InterviewStatus.completed,
+        completedAt: new Date(),
+        transcript,
+        transcriptWithTimestamps,
+        videoUrl: videoUrl || interview.videoUrl,
+        scores,
+        aiSummary: summary,
+      },
+    });
   }
 
   async getInterview(interviewId: string): Promise<Interview> {
-    const interview = await this.interviewRepository.findOne({
+    const interview = await this.prisma.interview.findUnique({
       where: { id: interviewId },
-      relations: ['candidate', 'job', 'recruiter'],
+      include: { candidate: true, job: true, client: true },
     });
 
     if (!interview) {
@@ -171,11 +171,11 @@ export class InterviewService {
     return interview;
   }
 
-  async getInterviewsByRecruiter(recruiterId: string): Promise<Interview[]> {
-    return await this.interviewRepository.find({
-      where: { recruiterId },
-      relations: ['candidate', 'job'],
-      order: { createdAt: 'DESC' },
+  async getInterviewsByClient(clientId: string): Promise<Interview[]> {
+    return await this.prisma.interview.findMany({
+      where: { clientId },
+      include: { candidate: true, job: true },
+      orderBy: { createdAt: 'desc' },
     });
   }
 }
