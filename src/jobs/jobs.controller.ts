@@ -8,10 +8,12 @@ import {
   Delete,
   UseGuards,
   Request,
+  Query,
 } from '@nestjs/common';
 import { JobsService } from './jobs.service';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
+import { JobQueryDto } from './dto/job-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('jobs')
@@ -25,8 +27,8 @@ export class JobsController {
   }
 
   @Get()
-  async getJobs(@Request() req) {
-    return this.jobsService.getJobsByClient(req.user.id);
+  async getJobs(@Request() req, @Query() query: JobQueryDto) {
+    return this.jobsService.getJobsByClient(req.user.id, query);
   }
 
   @Get(':id')
@@ -35,13 +37,17 @@ export class JobsController {
   }
 
   @Put(':id')
-  async updateJob(@Param('id') id: string, @Body() updateJobDto: UpdateJobDto) {
-    return this.jobsService.updateJob(id, updateJobDto);
+  async updateJob(
+    @Param('id') id: string,
+    @Body() updateJobDto: UpdateJobDto,
+    @Request() req,
+  ) {
+    return this.jobsService.updateJob(id, updateJobDto, req.user.id);
   }
 
   @Delete(':id')
-  async deleteJob(@Param('id') id: string) {
-    await this.jobsService.deleteJob(id);
+  async deleteJob(@Param('id') id: string, @Request() req) {
+    await this.jobsService.deleteJob(id, req.user.id);
     return { message: 'Job deleted successfully' };
   }
 }
