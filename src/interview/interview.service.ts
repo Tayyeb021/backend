@@ -1,10 +1,11 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Interview, InterviewStatus, InterviewLanguage } from '@prisma/client';
+import { Interview, InterviewStatus, InterviewLanguage, InterviewType } from '@prisma/client';
 import { DailyService } from './services/daily.service';
 import { GeminiService } from './services/gemini.service';
 import { CloudflareR2Service } from '../storage/cloudflare-r2.service';
-import { CreateInterviewDto } from './dto/create-interview.dto';
+import { EmailService } from '../email/email.service';
+import { CreateInterviewDto } from './dto/update-create-interview.dto';
 
 @Injectable()
 export class InterviewService {
@@ -13,6 +14,7 @@ export class InterviewService {
     private dailyService: DailyService,
     private geminiService: GeminiService,
     private r2Service: CloudflareR2Service,
+    private emailService: EmailService,
   ) {}
 
   async createInterview(
@@ -35,24 +37,36 @@ export class InterviewService {
       throw new NotFoundException('Job not found');
     }
 
-    // Create Daily.co room
-    const room = await this.dailyService.createRoom({
-      name: `interview-${candidate.id}-${Date.now()}`,
-      privacy: 'private',
-    });
+    // For live interviews, create Daily.co room immediately
+    // For on-demand interviews, room will be created when candidate starts
+    let dailyRoomId: string | null = null;
+    if (createInterviewDto.type === InterviewType.live || !createInterviewDto.type) {
+      const room = await this.dailyService.createRoom({
+        name: `interview-${candidate.id}-${Date.now()}`,
+        privacy: 'private',
+      });
+      dailyRoomId = room.name;
+    }
 
-    // Generate interview questions
-    const questions = await this.geminiService.generateInterviewQuestions(
-      job.description,
-      createInterviewDto.language,
-    );
+    // Determine initial status
+    let status = InterviewStatus.scheduled;
+    if (createInterviewDto.type === InterviewType.on_demand) {
+      status = InterviewStatus.pending_candidate_response;
+    }
 
     return await this.prisma.interview.create({
       data: {
-        ...createInterviewDto,
+        candidateId: createInterviewDto.candidateId,
+        jobId: createInterviewDto.jobId,
+        language: createInterviewDto.language,
+        type: createInterviewDto.type || InterviewType.live,
+        templateId: createInterviewDto.templateId,
+        scheduledAt: createInterviewDto.scheduledAt,
+        allowSelfScheduling: createInterviewDto.allowSelfScheduling || false,
+        deadline: createInterviewDto.deadline,
         clientId,
-        dailyRoomId: room.name,
-        status: InterviewStatus.scheduled,
+        dailyRoomId,
+        status,
       },
     });
   }
@@ -177,5 +191,111 @@ export class InterviewService {
       include: { candidate: true, job: true },
       orderBy: { createdAt: 'desc' },
     });
+  }
+
+  async scheduleInterview(
+    interviewId: string,
+    scheduledAt: Date,
+    selectedDateIndex?: number,
+  ): Promise<Interview> {
+    const interview = await this.prisma.interview.findUnique({
+      where: { id: interviewId },
+      include: {
+        candidate: true,
+        job: true,
+      },
+    });
+
+    if (!interview) {
+      throw new NotFoundException('Interview not found');
+    }
+
+    if (!interview.allowSelfScheduling) {
+      throw new NotFoundException('Self-scheduling not allowed for this interview');
+    }
+
+    // Update dateOptions if provided
+    let dateOptions = interview.dateOptions as any;
+    if (selectedDateIndex !== undefined && dateOptions && Array.isArray(dateOptions)) {
+      dateOptions = dateOptions.map((opt: any, index: number) => ({
+        ...opt,
+        selected: index === selectedDateIndex,
+      }));
+    }
+
+    const updatedInterview = await this.prisma.interview.update({
+      where: { id: interviewId },
+      data: {
+        scheduledAt,
+        status: InterviewStatus.scheduled,
+        dateOptions: dateOptions as any,
+      },
+      include: {
+        candidate: true,
+        job: true,
+      },
+    });
+
+    // Send confirmation email with calendar invite
+    try {
+      const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+      const interviewUrl = interview.dailyRoomId
+        ? `${frontendUrl}/interview/${interviewId}`
+        : undefined;
+
+      await this.emailService.sendInterviewConfirmationWithCalendar(
+        interview.candidate.email,
+        interview.candidate.name || 'Candidate',
+        interview.job.title,
+        scheduledAt,
+        interviewUrl,
+      );
+    } catch (error: any) {
+      console.error('Failed to send confirmation email:', error);
+      // Don't throw - interview was scheduled successfully
+    }
+
+    return updatedInterview;
+  }
+
+  async startOnDemandInterview(interviewId: string): Promise<{ token: string; roomId: string }> {
+    const interview = await this.prisma.interview.findUnique({
+      where: { id: interviewId },
+      include: { candidate: true },
+    });
+
+    if (!interview) {
+      throw new NotFoundException('Interview not found');
+    }
+
+    if (interview.type !== InterviewType.on_demand) {
+      throw new NotFoundException('This is not an on-demand interview');
+    }
+
+    // Create Daily.co room if not exists
+    let dailyRoomId = interview.dailyRoomId;
+    if (!dailyRoomId) {
+      const room = await this.dailyService.createRoom({
+        name: `interview-${interview.candidateId}-${Date.now()}`,
+        privacy: 'private',
+      });
+      dailyRoomId = room.name;
+
+      await this.prisma.interview.update({
+        where: { id: interviewId },
+        data: {
+          dailyRoomId,
+          candidateStartedAt: new Date(),
+          status: InterviewStatus.in_progress,
+        },
+      });
+    }
+
+    // Get token for candidate (not owner)
+    const token = await this.dailyService.getRoomToken(dailyRoomId, interview.candidateId, {
+      isOwner: false,
+    });
+
+    return { token, roomId: dailyRoomId };
   }
 }

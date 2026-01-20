@@ -50,4 +50,13 @@ export class JobsController {
     await this.jobsService.deleteJob(id, req.user.id);
     return { message: 'Job deleted successfully' };
   }
+
+  @Post(':id/auto-invite')
+  async autoInviteCandidates(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: { language?: string; type?: string; templateId?: string; daysAhead?: number[]; maxCandidates?: number },
+  ) {
+    return this.jobsService.autoInviteCandidates(id, req.user.id, body);
+  }
 }

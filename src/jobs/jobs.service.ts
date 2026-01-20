@@ -4,10 +4,14 @@ import { Job, JobStatus, Prisma } from '@prisma/client';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { JobQueryDto } from './dto/job-query.dto';
+import { JobsAutoInviteService } from './jobs-auto-invite.service';
 
 @Injectable()
 export class JobsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private autoInviteService: JobsAutoInviteService,
+  ) {}
 
   async createJob(createJobDto: CreateJobDto, clientId: string): Promise<Job> {
     // Validate salary range
@@ -17,13 +21,15 @@ export class JobsService {
       }
     }
 
-    // Set publishedAt if status is published
+    // Automatically set status to published if not specified
     const data: any = {
       ...createJobDto,
       clientId,
+      status: createJobDto.status || JobStatus.published, // Default to published
     };
 
-    if (createJobDto.status === JobStatus.published && !createJobDto.publishedAt) {
+    // Set publishedAt if status is published (or defaulting to published)
+    if (data.status === JobStatus.published && !createJobDto.publishedAt) {
       data.publishedAt = new Date();
     }
 
@@ -38,9 +44,26 @@ export class JobsService {
       data.expiresAt = new Date(createJobDto.expiresAt);
     }
 
-    return await this.prisma.job.create({
+    // Create the job
+    const job = await this.prisma.job.create({
       data,
     });
+
+    // Automatically invite top 10 matched candidates (jobs are always published by default)
+    if (job.status === JobStatus.published) {
+      // Run auto-invite in background (don't wait for it to complete)
+      this.autoInviteCandidates(job.id, clientId, {
+        language: 'en',
+        type: 'live',
+        daysAhead: [3, 5, 7],
+        maxCandidates: 10,
+      }).catch((error) => {
+        console.error('Failed to auto-invite candidates:', error);
+        // Don't throw - job creation should succeed even if invitations fail
+      });
+    }
+
+    return job;
   }
 
   async getJobsByClient(
@@ -260,7 +283,27 @@ export class JobsService {
   async getJob(id: string): Promise<Job> {
     const job = await this.prisma.job.findUnique({
       where: { id },
-      include: { candidates: true, client: true },
+      include: {
+        client: true,
+        interviews: {
+          include: {
+            candidate: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+                email: true,
+                phone: true,
+                skills: true,
+                status: true,
+              },
+            },
+          },
+          orderBy: {
+            createdAt: 'desc',
+          },
+        },
+      },
     });
 
     if (!job) {
@@ -295,12 +338,13 @@ export class JobsService {
     // Handle status transitions
     const data: any = { ...updateJobDto };
 
-    // Set publishedAt when status changes to published
-    if (
+    // Track if status is changing to published
+    const isChangingToPublished =
       updateJobDto.status === JobStatus.published &&
-      currentJob.status !== JobStatus.published &&
-      !updateJobDto.publishedAt
-    ) {
+      currentJob.status !== JobStatus.published;
+
+    // Set publishedAt when status changes to published
+    if (isChangingToPublished && !updateJobDto.publishedAt) {
       data.publishedAt = new Date();
     }
 
@@ -331,10 +375,26 @@ export class JobsService {
     }
 
     try {
-      return await this.prisma.job.update({
+      const updatedJob = await this.prisma.job.update({
         where: { id },
         data,
       });
+
+      // Automatically invite candidates if status changed to published
+      if (isChangingToPublished) {
+        // Run auto-invite in background (don't wait for it to complete)
+        this.autoInviteCandidates(updatedJob.id, clientId, {
+          language: 'en',
+          type: 'live',
+          daysAhead: [3, 5, 7],
+          maxCandidates: 10,
+        }).catch((error) => {
+          console.error('Failed to auto-invite candidates:', error);
+          // Don't throw - job update should succeed even if invitations fail
+        });
+      }
+
+      return updatedJob;
     } catch (error) {
       throw new NotFoundException('Job not found');
     }
@@ -362,5 +422,25 @@ export class JobsService {
     } catch (error) {
       throw new NotFoundException('Job not found');
     }
+  }
+
+  async autoInviteCandidates(
+    jobId: string,
+    clientId: string,
+    options: {
+      language?: string;
+      type?: string;
+      templateId?: string;
+      daysAhead?: number[];
+      maxCandidates?: number;
+    } = {},
+  ) {
+    return this.autoInviteService.autoInviteCandidates(jobId, clientId, {
+      language: options.language as any,
+      type: options.type as any,
+      templateId: options.templateId,
+      daysAhead: options.daysAhead,
+      maxCandidates: options.maxCandidates,
+    });
   }
 }
