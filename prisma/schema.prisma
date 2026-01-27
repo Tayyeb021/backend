@@ -51,10 +51,11 @@ model User {
   createdAt  DateTime    @default(now()) @db.Timestamp(6)
   updatedAt  DateTime    @default(now()) @updatedAt @db.Timestamp(6)
   companyId  String?     @db.Uuid
-  clients    Client[]    @relation("ClientCreatedBy")
-  interviews Interview[] @relation("InterviewClient")
-  jobs       Job[]       @relation("JobClient")
-  company    Company?    @relation(fields: [companyId], references: [id])
+  clients            Client[]            @relation("ClientCreatedBy")
+  interviews         Interview[]         @relation("InterviewClient")
+  jobs               Job[]               @relation("JobClient")
+  company            Company?            @relation(fields: [companyId], references: [id])
+  interviewTemplates InterviewTemplate[] @relation("TemplateClient")
 
   @@map("users")
 }
@@ -142,6 +143,7 @@ model Interview {
   jobId                    String            @db.Uuid
   clientId                 String            @db.Uuid
   status                   InterviewStatus   @default(scheduled)
+  type                     InterviewType     @default(live)
   language                 InterviewLanguage @default(en)
   scheduledAt              DateTime?         @db.Timestamp(6)
   startedAt                DateTime?         @db.Timestamp(6)
@@ -152,17 +154,66 @@ model Interview {
   transcriptWithTimestamps Json?
   scores                   Json?
   aiSummary                String?
+  templateId               String?           @db.Uuid
+  allowSelfScheduling      Boolean          @default(false)
+  deadline                 DateTime?         @db.Timestamp(6)
+  invitationSentAt         DateTime?         @db.Timestamp(6)
+  candidateStartedAt        DateTime?         @db.Timestamp(6)
+  dateOptions              Json?            // Array of 3 date options: [{ date: string, selected: boolean }]
   createdAt                DateTime          @default(now()) @db.Timestamp(6)
   updatedAt                DateTime          @default(now()) @updatedAt @db.Timestamp(6)
   job                      Job               @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_86c6a5b65c91b118189dc011aaa")
   candidate                Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_9b47fb5a4e06ccb14d20d2f06fd")
   client                   User              @relation("InterviewClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  template                 InterviewTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
 
   @@index([candidateId], map: "IDX_INTERVIEWS_CANDIDATE_ID")
   @@index([clientId], map: "IDX_INTERVIEWS_CLIENT_ID")
   @@index([jobId], map: "IDX_INTERVIEWS_JOB_ID")
   @@index([status], map: "IDX_INTERVIEWS_STATUS")
+  @@index([type], map: "IDX_INTERVIEWS_TYPE")
   @@map("interviews")
+}
+
+model InterviewTemplate {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String            @db.VarChar(255)
+  description String?
+  clientId    String            @db.Uuid
+  isDefault   Boolean           @default(false)
+  isPublic    Boolean           @default(false)
+  createdAt   DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime          @default(now()) @updatedAt @db.Timestamp(6)
+  client      User              @relation("TemplateClient", fields: [clientId], references: [id], onDelete: Cascade)
+  questions   InterviewQuestion[]
+  interviews Interview[]
+
+  @@index([clientId], map: "IDX_TEMPLATES_CLIENT_ID")
+  @@map("interview_templates")
+}
+
+model InterviewQuestion {
+  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  templateId  String            @db.Uuid
+  question    String
+  type        QuestionType      @default(behavioral)
+  order       Int               @default(0)
+  timeLimit   Int?              // Time limit in seconds
+  createdAt   DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime          @default(now()) @updatedAt @db.Timestamp(6)
+  template    InterviewTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId], map: "IDX_QUESTIONS_TEMPLATE_ID")
+  @@map("interview_questions")
+}
+
+enum QuestionType {
+  behavioral
+  technical
+  situational
+  cultural_fit
+  coding
+  system_design
 }
 
 model Client {
@@ -244,6 +295,12 @@ enum InterviewStatus {
   completed
   cancelled
   missed
+  pending_candidate_response
+}
+
+enum InterviewType {
+  live
+  on_demand
 }
 
 enum JobStatus {

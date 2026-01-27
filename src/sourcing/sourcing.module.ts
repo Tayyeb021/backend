@@ -15,6 +15,6 @@ import { EmailModule } from '../email/email.module';
     ScraperService,
     MatchingService,
   ],
-  exports: [SourcingService],
+  exports: [SourcingService, MatchingService],
 })
 export class SourcingModule {}

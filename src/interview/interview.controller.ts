@@ -9,7 +9,7 @@ import {
   Patch,
 } from '@nestjs/common';
 import { InterviewService } from './interview.service';
-import { CreateInterviewDto } from './dto/create-interview.dto';
+import { CreateInterviewDto } from './dto/update-create-interview.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('interviews')
@@ -80,5 +80,22 @@ export class InterviewController {
       body.transcriptWithTimestamps,
       body.videoUrl,
     );
+  }
+
+  @Patch(':id/schedule')
+  async scheduleInterview(
+    @Param('id') id: string,
+    @Body() body: { scheduledAt: string; selectedDateIndex?: number },
+  ) {
+    return this.interviewService.scheduleInterview(
+      id,
+      new Date(body.scheduledAt),
+      body.selectedDateIndex,
+    );
+  }
+
+  @Post(':id/start-on-demand')
+  async startOnDemandInterview(@Param('id') id: string) {
+    return this.interviewService.startOnDemandInterview(id);
   }
 }
