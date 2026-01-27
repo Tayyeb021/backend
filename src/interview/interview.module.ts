@@ -7,14 +7,19 @@ import { InterviewTemplateService } from './interview-template.service';
 import { DailyService } from './services/daily.service';
 import { GeminiService } from './services/gemini.service';
 import { GeminiRealtimeService } from './services/gemini-realtime.service';
+import { DeepgramService } from './services/deepgram.service';
+import { InterviewOptimizerService } from './services/interview-optimizer.service';
+import { SchedulingService } from './services/scheduling.service';
 import { InterviewGateway } from './gateways/interview.gateway';
 import { StorageModule } from '../storage/storage.module';
 import { EmailModule } from '../email/email.module';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
   imports: [
     StorageModule,
     EmailModule,
+    NotificationsModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
       signOptions: { expiresIn: '7d' },
@@ -27,8 +32,11 @@ import { EmailModule } from '../email/email.module';
     DailyService,
     GeminiService,
     GeminiRealtimeService,
+    DeepgramService,
+    InterviewOptimizerService,
+    SchedulingService,
     InterviewGateway,
   ],
-  exports: [InterviewService, InterviewTemplateService],
+  exports: [InterviewService, InterviewTemplateService, GeminiService, SchedulingService, InterviewOptimizerService],
 })
 export class InterviewModule {}

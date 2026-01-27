@@ -98,7 +98,12 @@ export class JobsAutoInviteService {
       };
     });
 
-    const invitations = [];
+    const invitations: Array<{
+      candidateId: string;
+      candidateName: string;
+      interviewId: string;
+      matchScore?: number;
+    }> = [];
 
     // Create interviews and send invitations
     for (const { candidate } of matchedCandidates) {
