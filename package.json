@@ -47,13 +47,16 @@
     "bcrypt": "^6.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.3",
+    "express-rate-limit": "^8.2.1",
     "passport": "^0.7.0",
     "passport-jwt": "^4.0.1",
     "passport-local": "^1.0.0",
     "pg": "^8.16.3",
     "reflect-metadata": "^0.2.2",
+    "redis": "^4.7.0",
     "rxjs": "^7.8.1",
-    "socket.io": "^4.8.3"
+    "socket.io": "^4.8.3",
+    "@deepgram/sdk": "^3.5.0"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.2.0",

@@ -10,6 +10,9 @@ import { CandidatesModule } from './candidates/candidates.module';
 import { SourcingModule } from './sourcing/sourcing.module';
 import { StorageModule } from './storage/storage.module';
 import { ClientsModule } from './clients/clients.module';
+import { EnterpriseModule } from './enterprise/enterprise.module';
+import { APP_INTERCEPTOR } from '@nestjs/core';
+import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
 
 @Module({
   imports: [
@@ -25,8 +28,15 @@ import { ClientsModule } from './clients/clients.module';
     SourcingModule,
     StorageModule,
     ClientsModule,
+    EnterpriseModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [
+    AppService,
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: AuditInterceptor,
+    },
+  ],
 })
 export class AppModule {}

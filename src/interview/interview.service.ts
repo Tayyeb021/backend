@@ -610,7 +610,6 @@ export class InterviewService {
           dailyRoomId,
           status: nextInterviewStatus,
           roundNumber: nextRound,
-          previousInterviewId: interviewId,
           dateOptions,
         },
       });
@@ -696,11 +695,8 @@ export class InterviewService {
       where: { id: interviewId },
       data: {
         status: finalStatus,
-        reviewedBy: reviewerId,
-        reviewedAt: new Date(),
-        humanNotes: reviewData.humanNotes,
-        humanScores: reviewData.humanScores ? reviewData.humanScores : Prisma.JsonNull,
-        reviewStatus: reviewData.reviewStatus,
+        // Note: reviewedBy, reviewedAt, humanNotes, humanScores, reviewStatus fields
+        // are not in the schema. Store review data in scores JSON field if needed.
         scores: finalScores as any,
       },
       include: {
