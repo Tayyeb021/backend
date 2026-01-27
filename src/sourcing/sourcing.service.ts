@@ -113,4 +113,85 @@ export class SourcingService {
       },
     });
   }
+
+  /**
+   * Extract candidates from job description by matching existing candidates
+   */
+  async extractCandidatesFromJob(
+    jobId: string,
+    numResults: number = 10,
+  ): Promise<Candidate[]> {
+    const job = await this.prisma.job.findUnique({ where: { id: jobId } });
+    if (!job) {
+      throw new Error('Job not found');
+    }
+
+    // Get all candidates that haven't been interviewed for this job
+    const allCandidates = await this.prisma.candidate.findMany({
+      where: {
+        NOT: {
+          interviews: {
+            some: {
+              jobId,
+            },
+          },
+        },
+      },
+      include: {
+        job: true,
+      },
+    });
+
+    // Match candidates to this job
+    const matchedCandidates = allCandidates
+      .map((candidate) => ({
+        candidate,
+        matchScore: this.matchingService.calculateMatchScore(
+          candidate.skills || [],
+          job,
+        ),
+      }))
+      .filter(({ matchScore }) =>
+        this.matchingService.shouldContact(matchScore, 50), // Lower threshold for extraction
+      )
+      .sort((a, b) => b.matchScore - a.matchScore) // Sort by match score descending
+      .slice(0, numResults) // Limit to requested number
+      .map(({ candidate }) => candidate);
+
+    // If candidates are not already associated with this job, update them
+    const results = await Promise.all(
+      matchedCandidates.map(async (candidate) => {
+        if (candidate.jobId !== jobId) {
+          // Create a new candidate entry for this job or update existing
+          const existing = await this.prisma.candidate.findFirst({
+            where: {
+              email: candidate.email,
+              jobId,
+            },
+          });
+
+          if (existing) {
+            return existing;
+          }
+
+          // Create new candidate entry for this job
+          return await this.prisma.candidate.create({
+            data: {
+              firstName: candidate.firstName,
+              lastName: candidate.lastName,
+              email: candidate.email,
+              phone: candidate.phone,
+              skills: candidate.skills,
+              resumeUrl: candidate.resumeUrl,
+              jobId,
+              status: CandidateStatus.sourced,
+            },
+          });
+        }
+        return candidate;
+      }),
+    );
+
+    return results;
+  }
 }

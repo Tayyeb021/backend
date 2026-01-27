@@ -12,6 +12,9 @@ import {
   InterviewType,
   InterviewLanguage,
   QuestionType,
+  Job,
+  Candidate,
+  InterviewTemplate,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 
@@ -142,7 +145,7 @@ async function main() {
     },
   ];
 
-  const createdJobs = [];
+  const createdJobs: Job[] = [];
   for (const jobData of testJobs) {
     const existingJob = await prisma.job.findFirst({
       where: {
@@ -358,7 +361,7 @@ async function main() {
     },
   ];
 
-  const createdCandidates = [];
+  const createdCandidates: Candidate[] = [];
   let createdCount = 0;
   let skippedCount = 0;
 
@@ -503,7 +506,7 @@ async function main() {
     },
   ];
 
-  const createdTemplates = [];
+  const createdTemplates: (InterviewTemplate & { questions: { id: string }[] })[] = [];
   for (const templateData of templates) {
     const existingTemplate = await prisma.interviewTemplate.findFirst({
       where: {
@@ -527,7 +530,15 @@ async function main() {
       createdTemplates.push(template);
       console.log(`   ✅ Created template: ${template.name} (${questions.length} questions)`);
     } else {
-      createdTemplates.push(existingTemplate);
+      const templateWithQuestions = await prisma.interviewTemplate.findUnique({
+        where: { id: existingTemplate.id },
+        include: { questions: true },
+      });
+      if (templateWithQuestions) {
+        createdTemplates.push(templateWithQuestions);
+      } else {
+        createdTemplates.push({ ...existingTemplate, questions: [] });
+      }
       console.log(`   ⏭️  Template already exists: ${existingTemplate.name}`);
     }
   }

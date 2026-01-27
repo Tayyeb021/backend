@@ -30,4 +30,7 @@ export class CreateInterviewDto {
   @IsDateString()
   @IsOptional()
   deadline?: Date;
+
+  @IsOptional()
+  externalMeetingUrl?: string;
 }

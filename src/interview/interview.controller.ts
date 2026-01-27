@@ -74,12 +74,11 @@ export class InterviewController {
       videoUrl?: string;
     },
   ) {
-    return this.interviewService.completeInterview(
-      id,
-      body.transcript,
-      body.transcriptWithTimestamps,
-      body.videoUrl,
-    );
+    return this.interviewService.completeInterview(id, {
+      transcript: body.transcript,
+      transcriptWithTimestamps: body.transcriptWithTimestamps,
+      videoUrl: body.videoUrl,
+    });
   }
 
   @Patch(':id/schedule')
