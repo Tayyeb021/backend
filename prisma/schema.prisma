@@ -32,6 +32,7 @@ model Company {
   description         String?
   authorizedSignatory Json?
   isActive            Boolean   @default(true)
+  isEnterprise        Boolean   @default(false)
   createdAt           DateTime  @default(now()) @db.Timestamp(6)
   updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamp(6)
   users               User[]
