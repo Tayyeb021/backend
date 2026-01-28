@@ -69,19 +69,20 @@ export class AutomationService {
 
       if (typeof condition === 'object' && condition !== null) {
         // Complex condition with operator
-        if (condition.operator === 'equals' && contextValue !== condition.value) {
+        const conditionObj = condition as { operator?: string; value?: any };
+        if (conditionObj.operator === 'equals' && contextValue !== conditionObj.value) {
           return false;
         }
-        if (condition.operator === 'not_equals' && contextValue === condition.value) {
+        if (conditionObj.operator === 'not_equals' && contextValue === conditionObj.value) {
           return false;
         }
-        if (condition.operator === 'greater_than' && contextValue <= condition.value) {
+        if (conditionObj.operator === 'greater_than' && contextValue <= conditionObj.value) {
           return false;
         }
-        if (condition.operator === 'less_than' && contextValue >= condition.value) {
+        if (conditionObj.operator === 'less_than' && contextValue >= conditionObj.value) {
           return false;
         }
-        if (condition.operator === 'contains' && !String(contextValue).includes(condition.value)) {
+        if (conditionObj.operator === 'contains' && !String(contextValue).includes(conditionObj.value)) {
           return false;
         }
       } else {

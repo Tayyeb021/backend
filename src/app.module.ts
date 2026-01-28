@@ -14,6 +14,12 @@ import { EnterpriseModule } from './enterprise/enterprise.module';
 import { AdminModule } from './admin/admin.module';
 import { CollaborationModule } from './collaboration/collaboration.module';
 import { AutomationModule } from './automation/automation.module';
+import { InsightsModule } from './insights/insights.module';
+import { AnalyticsModule } from './analytics/analytics.module';
+import { MarketIntelligenceModule } from './market-intelligence/market-intelligence.module';
+import { IntegrationsModule } from './integrations/integrations.module';
+import { AIAssistantModule } from './ai-assistant/ai-assistant.module';
+import { WhiteLabelModule } from './white-label/white-label.module';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
 
@@ -35,6 +41,12 @@ import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
     AdminModule,
     CollaborationModule,
     AutomationModule,
+    InsightsModule,
+    AnalyticsModule,
+    MarketIntelligenceModule,
+    IntegrationsModule,
+    AIAssistantModule,
+    WhiteLabelModule,
   ],
   controllers: [AppController],
   providers: [

@@ -220,8 +220,8 @@ export class InterviewService {
     // Include candidate profile and job data for proper cultural fit scoring
     const candidateProfile = {
       skills: interview.candidate.skills || [],
-      experienceYears: interview.candidate.experienceYears,
-      location: interview.candidate.location,
+      experienceYears: interview.candidate.experienceYears ?? undefined,
+      location: interview.candidate.location ?? undefined,
       profileData: interview.candidate.profileData,
     };
     
