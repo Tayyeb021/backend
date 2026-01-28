@@ -14,12 +14,16 @@ import { InterviewGateway } from './gateways/interview.gateway';
 import { StorageModule } from '../storage/storage.module';
 import { EmailModule } from '../email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { AutomationModule } from '../automation/automation.module';
+import { SourcingModule } from '../sourcing/sourcing.module';
 
 @Module({
   imports: [
     StorageModule,
     EmailModule,
     NotificationsModule,
+    AutomationModule,
+    SourcingModule, // Import to access MatchingService for cultural fit scoring
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
       signOptions: { expiresIn: '7d' },

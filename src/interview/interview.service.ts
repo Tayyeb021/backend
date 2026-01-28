@@ -15,6 +15,8 @@ import { InterviewOptimizerService } from './services/interview-optimizer.servic
 import { CreateInterviewDto } from './dto/update-create-interview.dto';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { SchedulingService } from './services/scheduling.service';
+import { AutomationService } from '../automation/automation.service';
+import { MatchingService } from '../sourcing/services/matching.service';
 
 @Injectable()
 export class InterviewService {
@@ -27,6 +29,8 @@ export class InterviewService {
     private optimizerService: InterviewOptimizerService,
     private notificationsGateway: NotificationsGateway,
     private schedulingService: SchedulingService,
+    private automationService: AutomationService,
+    private matchingService: MatchingService,
   ) {}
 
   async createInterview(
@@ -213,10 +217,20 @@ export class InterviewService {
     }
 
     // Calculate multi-dimensional scores using Gemini
+    // Include candidate profile and job data for proper cultural fit scoring
+    const candidateProfile = {
+      skills: interview.candidate.skills || [],
+      experienceYears: interview.candidate.experienceYears ?? undefined,
+      location: interview.candidate.location ?? undefined,
+      profileData: interview.candidate.profileData,
+    };
+    
     const scores = await this.calculateDetailedScores(
       transcript,
       interview.job.description,
       interview.job.requiredSkills || [],
+      candidateProfile,
+      interview.job,
     );
 
     // Generate instant feedback
@@ -256,6 +270,22 @@ export class InterviewService {
       description: `Interview with ${interview.candidate.firstName} ${interview.candidate.lastName} for ${interview.job.title} is ready for your review.`,
       type: 'info',
       href: `/dashboard/interviews/${interviewId}/review`,
+    });
+
+    // Trigger automation for interview_completed
+    this.automationService.executeAutomation('interview_completed', {
+      interviewId: interviewId,
+      candidateId: interview.candidateId,
+      candidateEmail: interview.candidate.email,
+      candidateName: `${interview.candidate.firstName} ${interview.candidate.lastName}`,
+      jobId: interview.jobId,
+      jobTitle: interview.job.title,
+      userId: interview.clientId,
+      scores: scores,
+      overallScore: scores.overall,
+    }).catch(error => {
+      console.error('Error executing automation for interview_completed:', error);
+      // Don't throw - automation failure shouldn't break interview completion
     });
 
     return updatedInterview;
@@ -493,11 +523,19 @@ export class InterviewService {
 
   /**
    * Calculate detailed multi-dimensional scores
+   * Now includes proper cultural fit scoring algorithm
    */
   async calculateDetailedScores(
     transcript: string,
     jobDescription: string,
     requiredSkills: string[],
+    candidateProfile?: {
+      skills?: string[];
+      experienceYears?: number;
+      location?: string;
+      profileData?: any;
+    },
+    job?: any, // Job object for cultural fit calculation
   ): Promise<{
     technical: number;
     communication: number;
@@ -516,9 +554,46 @@ export class InterviewService {
       
       // Calculate multi-dimensional scores from evaluation
       const technical = evaluation.score || 75;
-      const communication = Math.min(100, technical + 5); // Estimate based on transcript
-      const problemSolving = Math.min(100, technical - 5);
-      const culturalFit = Math.min(100, technical);
+      
+      // Communication score (based on transcript quality and clarity)
+      const communication = Math.min(
+        100,
+        technical +
+          (transcript.length > 500 ? 5 : 0) + // Longer responses = better communication
+          (transcript.split('.').length > 10 ? 5 : 0), // Well-structured = better
+      );
+
+      // Problem-solving score (analyze approach in transcript)
+      const problemSolving = Math.min(
+        100,
+        technical -
+          5 +
+          (transcript.toLowerCase().includes('step') ? 5 : 0) +
+          (transcript.toLowerCase().includes('analyze') ? 5 : 0) +
+          (transcript.toLowerCase().includes('solution') ? 5 : 0),
+      );
+
+      // Cultural Fit - Use proper algorithm (similar to technical skill matching)
+      let culturalFit: number;
+      if (candidateProfile && job) {
+        // Use AI-enhanced cultural fit scoring if available
+        culturalFit = await this.matchingService.calculateCulturalFitWithAI(
+          transcript,
+          jobDescription,
+          candidateProfile,
+          job,
+        );
+      } else if (candidateProfile) {
+        // Use rule-based scoring if job data not available
+        culturalFit = this.matchingService.calculateCulturalFitScore(
+          candidateProfile,
+          job || ({} as any),
+          transcript,
+        );
+      } else {
+        // Fallback: estimate from transcript
+        culturalFit = Math.min(100, technical);
+      }
 
       // Calculate weighted overall score
       const overall = Math.round(
@@ -672,6 +747,9 @@ export class InterviewService {
           interview.job.title,
           nextInterview.id,
           dateStrings,
+          interview.candidate.id, // Pass candidateId
+          interview.candidate.resumeUrl, // Pass resumeUrl
+          undefined, // No password for next round (user should already exist)
         );
       } else if (nextInterview.scheduledAt) {
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';

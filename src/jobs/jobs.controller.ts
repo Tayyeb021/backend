@@ -59,4 +59,20 @@ export class JobsController {
   ) {
     return this.jobsService.autoInviteCandidates(id, req.user.id, body);
   }
+
+  @Post(':id/invite-by-email')
+  async inviteByEmail(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: {
+      email: string;
+      firstName?: string;
+      lastName?: string;
+      externalMeetingUrl?: string;
+      language?: string;
+      type?: string;
+    },
+  ) {
+    return this.jobsService.inviteByEmail(id, req.user.id, body);
+  }
 }

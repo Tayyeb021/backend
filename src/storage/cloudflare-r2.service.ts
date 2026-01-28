@@ -123,4 +123,31 @@ export class CloudflareR2Service {
       throw new Error(`Failed to list old videos: ${error.message}`);
     }
   }
+
+  async uploadResume(
+    candidateId: string,
+    resumeBuffer: Buffer,
+    mimeType: string = 'application/pdf',
+  ): Promise<string> {
+    const extension = mimeType === 'application/pdf' ? 'pdf' :
+                     mimeType.includes('wordprocessingml') ? 'docx' :
+                     mimeType.includes('msword') ? 'doc' : 'txt';
+    const key = `resumes/${candidateId}/${Date.now()}.${extension}`;
+
+    try {
+      await this.s3Client.send(
+        new PutObjectCommand({
+          Bucket: this.bucketName,
+          Key: key,
+          Body: resumeBuffer,
+          ContentType: mimeType,
+        }),
+      );
+
+      // Return public URL (configured in R2 settings)
+      return `https://${this.bucketName}.r2.cloudflarestorage.com/${key}`;
+    } catch (error: any) {
+      throw new Error(`Failed to upload resume to R2: ${error.message}`);
+    }
+  }
 }

@@ -36,6 +36,9 @@ model Company {
   createdAt           DateTime  @default(now()) @db.Timestamp(6)
   updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamp(6)
   users               User[]
+  integrations        Integration[]
+  analytics           AnalyticsMetric[]
+  whiteLabelConfig    WhiteLabelConfig?
 
   @@map("companies")
 }
@@ -57,6 +60,13 @@ model User {
   jobs               Job[]               @relation("JobClient")
   company            Company?            @relation(fields: [companyId], references: [id])
   interviewTemplates InterviewTemplate[] @relation("TemplateClient")
+  comments           CandidateComment[]   @relation("CommentUser")
+  sharedCandidates   CandidateShare[]    @relation("SharedBy")
+  receivedShares     CandidateShare[]    @relation("SharedWith")
+  activityLogs       ActivityLog[]        @relation("ActivityUser")
+  integrations       Integration[]         @relation("UserIntegrations")
+  analytics          AnalyticsMetric[]     @relation("UserAnalytics")
+  aiChats            AIAssistantChat[]    @relation("AIAssistantChats")
 
   @@map("users")
 }
@@ -103,6 +113,7 @@ model Job {
   // Relations
   candidates Candidate[]
   interviews Interview[]
+  insights   CandidateInsight[]
 
   // Metadata
   createdAt DateTime @default(now()) @db.Timestamp(6)
@@ -132,6 +143,10 @@ model Candidate {
   updatedAt       DateTime        @default(now()) @updatedAt @db.Timestamp(6)
   job             Job             @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_426d378178da5713f1ab30daabc")
   interviews      Interview[]
+  comments        CandidateComment[]
+  shares          CandidateShare[]
+  activityLogs    ActivityLog[]
+  insights        CandidateInsight[]
 
   @@index([jobId], map: "IDX_CANDIDATES_JOB_ID")
   @@index([status], map: "IDX_CANDIDATES_STATUS")
@@ -483,4 +498,210 @@ model WebhookDelivery {
   @@index([webhookId], map: "IDX_WEBHOOK_DELIVERY_WEBHOOK")
   @@index([status], map: "IDX_WEBHOOK_DELIVERY_STATUS")
   @@map("webhook_deliveries")
+}
+
+model CandidateComment {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId   String   @db.Uuid
+  userId        String   @db.Uuid
+  content       String   @db.Text
+  mentionedUserIds String[] // Array of user IDs mentioned in the comment
+  createdAt     DateTime @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  candidate     Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user          User      @relation("CommentUser", fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([candidateId], map: "IDX_COMMENT_CANDIDATE")
+  @@index([userId], map: "IDX_COMMENT_USER")
+  @@map("candidate_comments")
+}
+
+model CandidateShare {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId     String   @db.Uuid
+  sharedByUserId  String   @db.Uuid
+  sharedWithUserId String   @db.Uuid
+  sharedAt        DateTime @default(now()) @db.Timestamp(6)
+  notes           String?  @db.Text
+  
+  candidate       Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  sharedBy        User      @relation("SharedBy", fields: [sharedByUserId], references: [id], onDelete: Cascade)
+  sharedWith      User      @relation("SharedWith", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+  
+  @@index([candidateId], map: "IDX_SHARE_CANDIDATE")
+  @@index([sharedByUserId], map: "IDX_SHARE_BY")
+  @@index([sharedWithUserId], map: "IDX_SHARE_WITH")
+  @@map("candidate_shares")
+}
+
+model ActivityLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId String?  @db.Uuid
+  userId      String   @db.Uuid
+  action      String   @db.VarChar(100)
+  details     Json?
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  
+  candidate   Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user        User       @relation("ActivityUser", fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([candidateId], map: "IDX_ACTIVITY_CANDIDATE")
+  @@index([userId], map: "IDX_ACTIVITY_USER")
+  @@index([action], map: "IDX_ACTIVITY_ACTION")
+  @@index([createdAt], map: "IDX_ACTIVITY_CREATED")
+  @@map("activity_logs")
+}
+
+model AutomationRule {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  trigger     String   @db.VarChar(100) // e.g., 'interview_completed', 'candidate_status_changed'
+  conditions  Json     // Conditions that must be met
+  actions     Json     // Actions to perform
+  isActive    Boolean  @default(true)
+  organizationId String? @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@index([trigger], map: "IDX_AUTOMATION_TRIGGER")
+  @@index([isActive], map: "IDX_AUTOMATION_ACTIVE")
+  @@index([organizationId], map: "IDX_AUTOMATION_ORG")
+  @@map("automation_rules")
+}
+
+// AI-Powered Candidate Insights
+model CandidateInsight {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId           String   @db.Uuid
+  jobId                 String?  @db.Uuid
+  successProbability    Float    @default(0) // 0-100
+  retentionRisk         Float    @default(50) // 0-100 (lower is better)
+  teamFitScore          Float    @default(0) // 0-100
+  timeToProductivity    Int?     // Days predicted
+  salaryExpectation     Json?    // Min/max range
+  strengths             String[]
+  risks                 String[]
+  recommendations       String[]
+  insights              Json?    // Additional AI-generated insights
+  calculatedAt          DateTime @default(now()) @db.Timestamp(6)
+  updatedAt             DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  candidate             Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job                   Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  
+  @@unique([candidateId, jobId], map: "UQ_INSIGHT_CANDIDATE_JOB")
+  @@index([candidateId], map: "IDX_INSIGHT_CANDIDATE")
+  @@index([jobId], map: "IDX_INSIGHT_JOB")
+  @@index([candidateId, jobId], map: "IDX_INSIGHT_CANDIDATE_JOB")
+  @@map("candidate_insights")
+}
+
+// Market Intelligence Data
+model MarketIntelligence {
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobTitle          String   @db.VarChar(255)
+  location          String   @db.VarChar(100)
+  industry          String?  @db.VarChar(100)
+  experienceLevel   String?  @db.VarChar(50)
+  avgSalary         Float?   // Average salary in local currency
+  minSalary         Float?
+  maxSalary         Float?
+  demandTrend        String?  @db.VarChar(50) // "increasing", "stable", "decreasing"
+  skillDemand        Json?    // { skill: demand_score }
+  marketData        Json?    // Additional market data
+  source             String?  @db.VarChar(100) // Data source
+  collectedAt        DateTime @default(now()) @db.Timestamp(6)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@unique([jobTitle, location, experienceLevel], map: "UQ_MARKET_INTEL")
+  @@index([jobTitle], map: "IDX_MARKET_JOB_TITLE")
+  @@index([location], map: "IDX_MARKET_LOCATION")
+  @@map("market_intelligence")
+}
+
+// Integration Configurations
+model Integration {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String?  @db.Uuid
+  companyId       String?  @db.Uuid
+  type            String   @db.VarChar(50) // "ats", "hris", "slack", "teams", "calendar", "zapier"
+  name            String   @db.VarChar(255)
+  provider        String   @db.VarChar(100) // "greenhouse", "lever", "workday", "slack", etc.
+  config          Json     // OAuth tokens, API keys, webhook URLs, etc.
+  isActive        Boolean  @default(true)
+  lastSyncAt      DateTime?
+  syncStatus      String?  @db.VarChar(50) // "success", "error", "pending"
+  errorMessage    String?
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  user            User?    @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  company         Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  @@index([userId], map: "IDX_INTEGRATION_USER")
+  @@index([companyId], map: "IDX_INTEGRATION_COMPANY")
+  @@index([type], map: "IDX_INTEGRATION_TYPE")
+  @@map("integrations")
+}
+
+// Analytics and Metrics
+model AnalyticsMetric {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String?  @db.Uuid
+  companyId       String?  @db.Uuid
+  metricType      String   @db.VarChar(100) // "time_to_hire", "cost_per_hire", "quality_of_hire", etc.
+  metricValue     Float
+  metadata        Json?    // Additional context
+  period          String?  @db.VarChar(50) // "daily", "weekly", "monthly", "yearly"
+  periodStart     DateTime @db.Timestamp(6)
+  periodEnd       DateTime @db.Timestamp(6)
+  calculatedAt    DateTime @default(now()) @db.Timestamp(6)
+  
+  user            User?    @relation("UserAnalytics", fields: [userId], references: [id], onDelete: Cascade)
+  company         Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  @@index([userId], map: "IDX_ANALYTICS_USER")
+  @@index([companyId], map: "IDX_ANALYTICS_COMPANY")
+  @@index([metricType], map: "IDX_ANALYTICS_TYPE")
+  @@index([periodStart, periodEnd], map: "IDX_ANALYTICS_PERIOD")
+  @@map("analytics_metrics")
+}
+
+// AI Assistant Chat History
+model AIAssistantChat {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @db.Uuid
+  sessionId   String   @db.VarChar(255)
+  message     String   @db.Text
+  response    String?  @db.Text
+  messageType String   @default("user") @db.VarChar(20) // "user", "assistant", "system"
+  context     Json?    // Additional context for the message
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  
+  user        User     @relation("AIAssistantChats", fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([userId], map: "IDX_AI_CHAT_USER")
+  @@index([sessionId], map: "IDX_AI_CHAT_SESSION")
+  @@map("ai_assistant_chats")
+}
+
+// White-label Configuration
+model WhiteLabelConfig {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId       String   @unique @db.Uuid
+  logoUrl         String?
+  primaryColor    String?  @db.VarChar(7) // Hex color
+  secondaryColor  String?  @db.VarChar(7)
+  companyName     String?  @db.VarChar(255)
+  domain          String?  @unique @db.VarChar(255) // Custom domain
+  customCss       String?  @db.Text
+  isActive        Boolean  @default(false)
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  @@map("white_label_configs")
 }
