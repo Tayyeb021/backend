@@ -67,6 +67,7 @@ export class EmailService {
     dateOptions: string[],
     candidateId?: string,
     candidateResumeUrl?: string | null,
+    generatedPassword?: string,
   ): Promise<void> {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const scheduleUrl = `${frontendUrl}/interview/schedule/${interviewId}`;
@@ -140,6 +141,32 @@ export class EmailService {
           <h2 style="color: #4F46E5;">Interview Invitation</h2>
           <p>Dear ${candidateName},</p>
           <p>We are pleased to invite you for an AI-powered interview for the position of <strong>${jobTitle}</strong>.</p>
+          
+          ${generatedPassword ? `
+          <!-- Login Credentials Section - Only shown if user account was just created -->
+          <div style="margin: 25px 0; padding: 20px; background-color: #e0f2fe; border-left: 4px solid #0ea5e9; border-radius: 4px;">
+            <p style="margin: 0 0 15px 0; font-weight: bold; color: #0c4a6e; font-size: 16px;">
+              🔐 Your Login Credentials
+            </p>
+            <p style="margin: 0 0 10px 0; color: #075985; font-size: 14px; line-height: 1.6;">
+              We've created an account for you. Use these credentials to log in to your candidate dashboard:
+            </p>
+            <div style="background-color: #f0f9ff; padding: 12px; border-radius: 4px; margin: 10px 0; border: 1px solid #bae6fd;">
+              <p style="margin: 5px 0; font-family: monospace; color: #0c4a6e; font-size: 14px;">
+                <strong>Email:</strong> ${to}<br>
+                <strong>Password:</strong> <span style="background-color: #fff; padding: 2px 6px; border-radius: 3px; font-weight: bold;">${generatedPassword}</span>
+              </p>
+            </div>
+            <p style="margin: 10px 0 0 0; font-size: 12px; color: #075985;">
+              ⚠️ <strong>Please save this password securely.</strong> You can change it after logging in.
+            </p>
+            <p style="margin: 15px 0 0 0;">
+              <a href="${frontendUrl}/login" style="background-color: #0ea5e9; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold; font-size: 14px;">
+                🔑 Login Now
+              </a>
+            </p>
+          </div>
+          ` : ''}
           
           ${resumeUploadUrl ? `
           <!-- Resume Upload Section - Only shown if candidate has no resume -->

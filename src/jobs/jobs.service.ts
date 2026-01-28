@@ -1,12 +1,14 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Job, JobStatus, Prisma, CandidateStatus, InterviewLanguage, InterviewType } from '@prisma/client';
+import { Job, JobStatus, Prisma, CandidateStatus, InterviewLanguage, InterviewType, UserRole } from '@prisma/client';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { JobQueryDto } from './dto/job-query.dto';
 import { JobsAutoInviteService } from './jobs-auto-invite.service';
 import { InterviewService } from '../interview/interview.service';
 import { EmailService } from '../email/email.service';
+import * as bcrypt from 'bcrypt';
+import { generateSecurePassword } from '../candidates/utils/password.utils';
 
 @Injectable()
 export class JobsService {
@@ -481,6 +483,31 @@ export class JobsService {
       },
     });
 
+    // Check if User account exists for this email
+    let user = await this.prisma.user.findUnique({
+      where: { email: body.email },
+    });
+
+    let generatedPassword: string | undefined;
+
+    // If no User account exists, create one with auto-generated password
+    if (!user) {
+      generatedPassword = generateSecurePassword();
+      const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+      
+      user = await this.prisma.user.create({
+        data: {
+          email: body.email,
+          password: hashedPassword,
+          firstName: body.firstName || 'Candidate',
+          lastName: body.lastName || '',
+          phone: null,
+          role: UserRole.interviewee,
+          isActive: true,
+        },
+      });
+    }
+
     if (!candidate) {
       // Create new candidate for this job
       candidate = await this.prisma.candidate.create({
@@ -566,6 +593,7 @@ export class JobsService {
       dateOptions.map((opt) => opt.date),
       candidate.id, // Pass candidateId for token generation
       candidate.resumeUrl, // Pass resumeUrl to check if resume exists
+      generatedPassword, // Pass generated password if user was just created
     );
 
     // Update candidate status
