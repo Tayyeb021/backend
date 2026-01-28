@@ -703,6 +703,8 @@ export class InterviewService {
           interview.job.title,
           nextInterview.id,
           dateStrings,
+          interview.candidate.id, // Pass candidateId
+          interview.candidate.resumeUrl, // Pass resumeUrl
         );
       } else if (nextInterview.scheduledAt) {
         const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';

@@ -1,16 +1,21 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Job, JobStatus, Prisma } from '@prisma/client';
+import { Job, JobStatus, Prisma, CandidateStatus, InterviewLanguage, InterviewType } from '@prisma/client';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { JobQueryDto } from './dto/job-query.dto';
 import { JobsAutoInviteService } from './jobs-auto-invite.service';
+import { InterviewService } from '../interview/interview.service';
+import { EmailService } from '../email/email.service';
 
 @Injectable()
 export class JobsService {
   constructor(
     private prisma: PrismaService,
     private autoInviteService: JobsAutoInviteService,
+    @Inject(forwardRef(() => InterviewService))
+    private interviewService: InterviewService,
+    private emailService: EmailService,
   ) {}
 
   async createJob(createJobDto: CreateJobDto, clientId: string): Promise<Job> {
@@ -442,5 +447,138 @@ export class JobsService {
       daysAhead: options.daysAhead,
       maxCandidates: options.maxCandidates,
     });
+  }
+
+  async inviteByEmail(
+    jobId: string,
+    clientId: string,
+    body: {
+      email: string;
+      firstName?: string;
+      lastName?: string;
+      externalMeetingUrl?: string;
+      language?: string;
+      type?: string;
+    },
+  ) {
+    // Validate job exists and user has access
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+
+    if (job.clientId !== clientId) {
+      throw new ForbiddenException('You do not have permission to invite candidates for this job');
+    }
+
+    // Find candidate by email (email is unique globally)
+    let candidate = await this.prisma.candidate.findUnique({
+      where: {
+        email: body.email,
+      },
+    });
+
+    if (!candidate) {
+      // Create new candidate for this job
+      candidate = await this.prisma.candidate.create({
+        data: {
+          email: body.email,
+          firstName: body.firstName || 'Candidate',
+          lastName: body.lastName || '',
+          jobId: jobId,
+          skills: [],
+          status: CandidateStatus.sourced,
+        },
+      });
+    } else {
+      // Candidate exists - update their info and jobId if needed
+      const updateData: any = {};
+      
+      if (body.firstName) {
+        updateData.firstName = body.firstName;
+      }
+      if (body.lastName) {
+        updateData.lastName = body.lastName;
+      }
+      
+      // Update jobId if candidate is not already associated with this job
+      if (candidate.jobId !== jobId) {
+        updateData.jobId = jobId;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        candidate = await this.prisma.candidate.update({
+          where: { id: candidate.id },
+          data: updateData,
+        });
+      }
+    }
+
+    // Generate date options (3, 5, 7 days from now)
+    const daysAhead = [3, 5, 7];
+    const dateOptions: Array<{ date: string; selected: boolean }> = daysAhead.map((days) => {
+      const date = new Date();
+      date.setDate(date.getDate() + days);
+      date.setHours(10, 0, 0, 0); // Set to 10 AM
+      return {
+        date: date.toISOString(),
+        selected: false,
+      };
+    });
+
+    // Create interview
+    const interview = await this.interviewService.createInterview(
+      {
+        candidateId: candidate.id,
+        jobId: job.id,
+        language: (body.language as InterviewLanguage) || InterviewLanguage.en,
+        type: (body.type as InterviewType) || InterviewType.live,
+        allowSelfScheduling: true,
+        deadline: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days from now
+        externalMeetingUrl: body.externalMeetingUrl,
+      },
+      clientId,
+    );
+
+    // Update interview with date options
+    await this.prisma.interview.update({
+      where: { id: interview.id },
+      data: {
+        dateOptions: dateOptions as any,
+        invitationSentAt: new Date(),
+      },
+    });
+
+    // Send email invitation with date options
+    const candidateName = `${candidate.firstName} ${candidate.lastName}`.trim() || 'Candidate';
+    
+    // Check if candidate has resume
+    const hasResume = !!candidate.resumeUrl;
+    
+    await this.emailService.sendInterviewInvitationWithDates(
+      candidate.email,
+      candidateName,
+      job.title,
+      interview.id,
+      dateOptions.map((opt) => opt.date),
+      candidate.id, // Pass candidateId for token generation
+      candidate.resumeUrl, // Pass resumeUrl to check if resume exists
+    );
+
+    // Update candidate status
+    await this.prisma.candidate.update({
+      where: { id: candidate.id },
+      data: { status: CandidateStatus.contacted },
+    });
+
+    return {
+      message: 'Invitation sent successfully',
+      candidateId: candidate.id,
+      interviewId: interview.id,
+      candidateName: `${candidate.firstName} ${candidate.lastName}`,
+    };
   }
 }

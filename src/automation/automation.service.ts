@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { EmailService } from '../email/email.service';
 import { NotificationsGateway } from '../notifications/notifications.gateway';
@@ -18,6 +18,7 @@ interface AutomationContext {
 export class AutomationService {
   constructor(
     private prisma: PrismaService,
+    @Inject(forwardRef(() => EmailService))
     private emailService: EmailService,
     private notificationsGateway: NotificationsGateway,
   ) {}

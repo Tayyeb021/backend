@@ -133,12 +133,17 @@ export class JobsAutoInviteService {
 
         // Send email invitation with 3 date options
         if (candidate.email) {
+          // Check if candidate has resume
+          const hasResume = !!candidate.resumeUrl;
+          
           await this.emailService.sendInterviewInvitationWithDates(
             candidate.email,
             candidate.firstName,
             job.title,
             interview.id,
             dateOptions.map((opt) => opt.date),
+            candidate.id, // Pass candidateId for token generation
+            candidate.resumeUrl, // Pass resumeUrl to check if resume exists
           );
 
           // Update candidate status

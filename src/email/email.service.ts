@@ -1,21 +1,27 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import {
   generateICalFile,
   generateAddToCalendarLinks,
   CalendarEvent,
 } from './calendar-helper';
+import { CandidatesService } from '../candidates/candidates.service';
 
 @Injectable()
 export class EmailService {
   private readonly sendgrid: any;
+  private candidatesService: CandidatesService | null = null;
 
-  constructor() {
+  constructor(
+    @Inject(forwardRef(() => CandidatesService))
+    candidatesService: CandidatesService,
+  ) {
     // Use require for SendGrid to ensure compatibility with v8
     this.sendgrid = require('@sendgrid/mail');
     const apiKey = process.env.SENDGRID_API_KEY || '';
     if (apiKey) {
       this.sendgrid.setApiKey(apiKey);
     }
+    this.candidatesService = candidatesService;
   }
 
   async sendInterviewInvitation(
@@ -59,6 +65,8 @@ export class EmailService {
     jobTitle: string,
     interviewId: string,
     dateOptions: string[],
+    candidateId?: string,
+    candidateResumeUrl?: string | null,
   ): Promise<void> {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const scheduleUrl = `${frontendUrl}/interview/schedule/${interviewId}`;
@@ -108,6 +116,21 @@ export class EmailService {
       url: scheduleUrl,
     });
 
+    // Generate resume upload token if candidate has no resume
+    let resumeUploadUrl: string | null = null;
+    if (candidateId && !candidateResumeUrl && this.candidatesService) {
+      try {
+        const token = await this.candidatesService.generateResumeUploadToken(
+          candidateId,
+          interviewId,
+        );
+        resumeUploadUrl = `${frontendUrl}/candidate/resume-upload/${token}`;
+      } catch (error) {
+        console.error('Failed to generate resume upload token:', error);
+        // Continue without resume upload link if token generation fails
+      }
+    }
+
     const msg = {
       to,
       from: fromEmail,
@@ -117,6 +140,27 @@ export class EmailService {
           <h2 style="color: #4F46E5;">Interview Invitation</h2>
           <p>Dear ${candidateName},</p>
           <p>We are pleased to invite you for an AI-powered interview for the position of <strong>${jobTitle}</strong>.</p>
+          
+          ${resumeUploadUrl ? `
+          <!-- Resume Upload Section - Only shown if candidate has no resume -->
+          <div style="margin: 25px 0; padding: 20px; background-color: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px;">
+            <p style="margin: 0 0 15px 0; font-weight: bold; color: #92400e; font-size: 16px;">
+              📄 Complete Your Profile - Upload Your Resume
+            </p>
+            <p style="margin: 0 0 15px 0; color: #78350f; font-size: 14px; line-height: 1.6;">
+              We noticed you haven't uploaded your resume yet. Help us get to know you better by uploading your resume. This will help us prepare a more personalized interview experience for you.
+            </p>
+            <p style="margin: 0 0 15px 0;">
+              <a href="${resumeUploadUrl}" style="background-color: #f59e0b; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">
+                📤 Upload Resume Now
+              </a>
+            </p>
+            <p style="margin: 0; font-size: 12px; color: #92400e;">
+              💡 Tip: You can upload your resume now or after scheduling your interview. Both options are available!
+            </p>
+          </div>
+          ` : ''}
+          
           <p>Please select one of the following available time slots:</p>
           ${dateOptionsHtml}
           <p style="margin-top: 30px;">
