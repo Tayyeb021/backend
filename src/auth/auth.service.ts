@@ -304,8 +304,9 @@ export class AuthService {
   } {
     const payload = { sub: user.id, email: user.email, role: user.role };
 
-    // Access token expires in 15 minutes
-    const accessToken = this.jwtService.sign(payload, { expiresIn: '15m' });
+    // Access token expiration from environment variable (default: 8 hours)
+    const accessTokenExpiration = process.env.JWT_ACCESS_TOKEN_EXPIRATION || '8h';
+    const accessToken = this.jwtService.sign(payload, { expiresIn: accessTokenExpiration as any });
 
     // Refresh token expires in 7 days
     const refreshToken = this.jwtService.sign(payload, { expiresIn: '7d' });
@@ -330,8 +331,10 @@ export class AuthService {
       }
 
       const newPayload = { sub: user.id, email: user.email, role: user.role };
+      // Access token expiration from environment variable (default: 8 hours)
+      const accessTokenExpiration = process.env.JWT_ACCESS_TOKEN_EXPIRATION || '8h';
       const accessToken = this.jwtService.sign(newPayload, {
-        expiresIn: '15m',
+        expiresIn: accessTokenExpiration as any,
       });
 
       return { accessToken };

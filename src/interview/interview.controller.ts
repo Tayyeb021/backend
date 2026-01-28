@@ -97,4 +97,9 @@ export class InterviewController {
   async startOnDemandInterview(@Param('id') id: string) {
     return this.interviewService.startOnDemandInterview(id);
   }
+
+  @Post(':id/create-room')
+  async createRoom(@Param('id') id: string) {
+    return this.interviewService.createRoomForInterview(id);
+  }
 }

@@ -447,6 +447,50 @@ export class InterviewService {
     return { token, roomId };
   }
 
+  async createRoomForInterview(interviewId: string): Promise<Interview> {
+    const interview = await this.prisma.interview.findUnique({
+      where: { id: interviewId },
+      include: { candidate: true },
+    });
+
+    if (!interview) {
+      throw new NotFoundException('Interview not found');
+    }
+
+    // Check if room already exists
+    if (interview.dailyRoomId) {
+      throw new BadRequestException('Room already exists for this interview');
+    }
+
+    // Create Daily.co room
+    const room = await this.dailyService.createRoom({
+      name: `interview-${interview.candidateId}-${Date.now()}`,
+      privacy: 'private',
+    });
+
+    // Update interview with room ID
+    const updatedInterview = await this.prisma.interview.update({
+      where: { id: interviewId },
+      data: {
+        dailyRoomId: room.name,
+      },
+      include: {
+        candidate: true,
+        job: true,
+        client: true,
+        template: {
+          include: {
+            questions: {
+              orderBy: { order: 'asc' },
+            },
+          },
+        },
+      },
+    });
+
+    return updatedInterview;
+  }
+
   /**
    * Calculate detailed multi-dimensional scores
    */
