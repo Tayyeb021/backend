@@ -12,6 +12,8 @@ import { StorageModule } from './storage/storage.module';
 import { ClientsModule } from './clients/clients.module';
 import { EnterpriseModule } from './enterprise/enterprise.module';
 import { AdminModule } from './admin/admin.module';
+import { CollaborationModule } from './collaboration/collaboration.module';
+import { AutomationModule } from './automation/automation.module';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
 
@@ -31,6 +33,8 @@ import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
     ClientsModule,
     EnterpriseModule,
     AdminModule,
+    CollaborationModule,
+    AutomationModule,
   ],
   controllers: [AppController],
   providers: [

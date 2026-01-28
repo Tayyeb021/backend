@@ -285,4 +285,30 @@ export class EmailService {
       throw new Error(`Failed to send confirmation email: ${error.message}`);
     }
   }
+
+  /**
+   * Generic email sending method for automation and other use cases
+   */
+  async sendEmail(
+    to: string,
+    subject: string,
+    html: string,
+    text?: string,
+    from?: string,
+  ): Promise<void> {
+    const msg = {
+      to,
+      from: from || process.env.SENDGRID_FROM_EMAIL || 'noreply@falconrecruiter.com',
+      subject,
+      html,
+      text: text || html.replace(/<[^>]*>/g, ''), // Strip HTML tags for text version
+    };
+
+    try {
+      await this.sendgrid.send(msg);
+    } catch (error: any) {
+      console.error('Failed to send email:', error);
+      throw new Error(`Failed to send email: ${error.message}`);
+    }
+  }
 }

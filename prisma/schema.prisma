@@ -57,6 +57,10 @@ model User {
   jobs               Job[]               @relation("JobClient")
   company            Company?            @relation(fields: [companyId], references: [id])
   interviewTemplates InterviewTemplate[] @relation("TemplateClient")
+  comments           CandidateComment[]   @relation("CommentUser")
+  sharedCandidates   CandidateShare[]    @relation("SharedBy")
+  receivedShares     CandidateShare[]    @relation("SharedWith")
+  activityLogs       ActivityLog[]        @relation("ActivityUser")
 
   @@map("users")
 }
@@ -132,6 +136,9 @@ model Candidate {
   updatedAt       DateTime        @default(now()) @updatedAt @db.Timestamp(6)
   job             Job             @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_426d378178da5713f1ab30daabc")
   interviews      Interview[]
+  comments        CandidateComment[]
+  shares          CandidateShare[]
+  activityLogs    ActivityLog[]
 
   @@index([jobId], map: "IDX_CANDIDATES_JOB_ID")
   @@index([status], map: "IDX_CANDIDATES_STATUS")
@@ -483,4 +490,75 @@ model WebhookDelivery {
   @@index([webhookId], map: "IDX_WEBHOOK_DELIVERY_WEBHOOK")
   @@index([status], map: "IDX_WEBHOOK_DELIVERY_STATUS")
   @@map("webhook_deliveries")
+}
+
+model CandidateComment {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId   String   @db.Uuid
+  userId        String   @db.Uuid
+  content       String   @db.Text
+  mentionedUserIds String[] // Array of user IDs mentioned in the comment
+  createdAt     DateTime @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  candidate     Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user          User      @relation("CommentUser", fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([candidateId], map: "IDX_COMMENT_CANDIDATE")
+  @@index([userId], map: "IDX_COMMENT_USER")
+  @@map("candidate_comments")
+}
+
+model CandidateShare {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId     String   @db.Uuid
+  sharedByUserId  String   @db.Uuid
+  sharedWithUserId String   @db.Uuid
+  sharedAt        DateTime @default(now()) @db.Timestamp(6)
+  notes           String?  @db.Text
+  
+  candidate       Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  sharedBy        User      @relation("SharedBy", fields: [sharedByUserId], references: [id], onDelete: Cascade)
+  sharedWith      User      @relation("SharedWith", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+  
+  @@index([candidateId], map: "IDX_SHARE_CANDIDATE")
+  @@index([sharedByUserId], map: "IDX_SHARE_BY")
+  @@index([sharedWithUserId], map: "IDX_SHARE_WITH")
+  @@map("candidate_shares")
+}
+
+model ActivityLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId String?  @db.Uuid
+  userId      String   @db.Uuid
+  action      String   @db.VarChar(100)
+  details     Json?
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  
+  candidate   Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user        User       @relation("ActivityUser", fields: [userId], references: [id], onDelete: Cascade)
+  
+  @@index([candidateId], map: "IDX_ACTIVITY_CANDIDATE")
+  @@index([userId], map: "IDX_ACTIVITY_USER")
+  @@index([action], map: "IDX_ACTIVITY_ACTION")
+  @@index([createdAt], map: "IDX_ACTIVITY_CREATED")
+  @@map("activity_logs")
+}
+
+model AutomationRule {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @db.VarChar(255)
+  description String?  @db.Text
+  trigger     String   @db.VarChar(100) // e.g., 'interview_completed', 'candidate_status_changed'
+  conditions  Json     // Conditions that must be met
+  actions     Json     // Actions to perform
+  isActive    Boolean  @default(true)
+  organizationId String? @db.Uuid
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@index([trigger], map: "IDX_AUTOMATION_TRIGGER")
+  @@index([isActive], map: "IDX_AUTOMATION_ACTIVE")
+  @@index([organizationId], map: "IDX_AUTOMATION_ORG")
+  @@map("automation_rules")
 }

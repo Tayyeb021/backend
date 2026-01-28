@@ -8,6 +8,7 @@ import {
   Patch,
   UseGuards,
   Query,
+  Request,
 } from '@nestjs/common';
 import { CandidatesService } from './candidates.service';
 import { CreateCandidateDto } from './dto/create-candidate.dto';
@@ -50,7 +51,8 @@ export class CandidatesController {
   async updateCandidateStatus(
     @Param('id') id: string,
     @Body() body: { status: CandidateStatus },
+    @Request() req: any,
   ) {
-    return this.candidatesService.updateCandidateStatus(id, body.status);
+    return this.candidatesService.updateCandidateStatus(id, body.status, req.user.id);
   }
 }
