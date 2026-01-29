@@ -67,6 +67,7 @@ model User {
   integrations       Integration[]         @relation("UserIntegrations")
   analytics          AnalyticsMetric[]     @relation("UserAnalytics")
   aiChats            AIAssistantChat[]    @relation("AIAssistantChats")
+  assessments        CodingAssessment[]   @relation("AssessmentRecruiter")
 
   @@map("users")
 }
@@ -114,6 +115,7 @@ model Job {
   candidates Candidate[]
   interviews Interview[]
   insights   CandidateInsight[]
+  assessments CodingAssessment[]
 
   // Metadata
   createdAt DateTime @default(now()) @db.Timestamp(6)
@@ -147,6 +149,7 @@ model Candidate {
   shares          CandidateShare[]
   activityLogs    ActivityLog[]
   insights        CandidateInsight[]
+  assessments     CodingAssessment[]
 
   @@index([jobId], map: "IDX_CANDIDATES_JOB_ID")
   @@index([status], map: "IDX_CANDIDATES_STATUS")
@@ -184,6 +187,7 @@ model Interview {
   candidate                Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_9b47fb5a4e06ccb14d20d2f06fd")
   client                   User              @relation("InterviewClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   template                 InterviewTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  assessments              CodingAssessment[]
 
   @@index([candidateId], map: "IDX_INTERVIEWS_CANDIDATE_ID")
   @@index([clientId], map: "IDX_INTERVIEWS_CLIENT_ID")
@@ -191,6 +195,54 @@ model Interview {
   @@index([status], map: "IDX_INTERVIEWS_STATUS")
   @@index([type], map: "IDX_INTERVIEWS_TYPE")
   @@map("interviews")
+}
+
+model CodingAssessment {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId     String                @db.Uuid
+  jobId           String                @db.Uuid
+  interviewId     String?               @db.Uuid // Link to the interview that triggered this
+  recruiterId     String                @db.Uuid // Who created it
+  
+  question        String                @db.Text
+  language        String                @default("javascript") @db.VarChar(50)
+  testCases       Json                  // Array of test cases: [{ input: any, expected: any, name: string }]
+  maxScore        Int                   @default(100)
+  
+  status          AssessmentStatus      @default(pending)
+  startedAt       DateTime?             @db.Timestamp(6)
+  submittedAt     DateTime?             @db.Timestamp(6)
+  deadline        DateTime?             @db.Timestamp(6)
+  
+  codeSubmission  String?               @db.Text
+  testResults     Json?                 // Array of test results: [{ name: string, passed: boolean, input: any, expected: any, output: any, error?: string, executionTime?: string }]
+  score           Int?                  // Calculated score based on passed tests
+  timeSpent       Int?                  // Time spent in seconds
+  codeReview      Json?                 // AI code review from Gemini: { overallScore, qualityScore, efficiencyScore, readabilityScore, bestPracticesScore, strengths, weaknesses, suggestions, review, complexity, timeComplexity, spaceComplexity }
+  accessToken     String?               @unique @db.VarChar(255) // Secure token for public candidate access
+  tokenExpiry     DateTime?             @db.Timestamp(6) // Token expiry date
+  
+  createdAt       DateTime              @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime              @default(now()) @updatedAt @db.Timestamp(6)
+  
+  candidate       Candidate             @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job             Job                   @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  interview       Interview?            @relation(fields: [interviewId], references: [id], onDelete: SetNull)
+  recruiter       User                  @relation("AssessmentRecruiter", fields: [recruiterId], references: [id], onDelete: Cascade)
+  
+  @@index([candidateId], map: "IDX_ASSESSMENT_CANDIDATE")
+  @@index([jobId], map: "IDX_ASSESSMENT_JOB")
+  @@index([interviewId], map: "IDX_ASSESSMENT_INTERVIEW")
+  @@index([recruiterId], map: "IDX_ASSESSMENT_RECRUITER")
+  @@index([status], map: "IDX_ASSESSMENT_STATUS")
+  @@map("coding_assessments")
+}
+
+enum AssessmentStatus {
+  pending
+  in_progress
+  submitted
+  expired
 }
 
 model InterviewTemplate {
