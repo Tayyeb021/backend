@@ -20,6 +20,7 @@ import { MarketIntelligenceModule } from './market-intelligence/market-intellige
 import { IntegrationsModule } from './integrations/integrations.module';
 import { AIAssistantModule } from './ai-assistant/ai-assistant.module';
 import { WhiteLabelModule } from './white-label/white-label.module';
+import { AssessmentsModule } from './assessments/assessments.module';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
 
@@ -47,6 +48,7 @@ import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
     IntegrationsModule,
     AIAssistantModule,
     WhiteLabelModule,
+    AssessmentsModule,
   ],
   controllers: [AppController],
   providers: [

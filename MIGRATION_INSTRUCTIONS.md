@@ -1,78 +1,80 @@
-# Migration Instructions for Enterprise Features
+# Migration Instructions for Coding Assessments
 
 ## Issue
-The shadow database doesn't have the base tables, causing migration failures.
+The shadow database migration check is failing. This is a common issue with Prisma when the shadow database is out of sync.
 
-## Solution Options
+## Solution: Manual Migration
 
-### Option 1: Use `prisma db push` (Recommended for Development)
-This directly applies schema changes without using a shadow database:
+A migration file has been created at:
+`backend/prisma/migrations/20250130000000_add_coding_assessments/migration.sql`
+
+### Option 1: Apply Migration Directly (Recommended)
+
+Run this command in your terminal:
 
 ```bash
 cd backend
-npx prisma db push
+npx prisma migrate resolve --applied 20250130000000_add_coding_assessments
 npx prisma generate
 ```
 
-### Option 2: Apply Migration Manually
-The migration SQL file has been created at:
-`backend/prisma/migrations/20250120000000_add_enterprise_features/migration.sql`
-
-You can apply it directly to your database using your database client or:
+### Option 2: Use migrate deploy (Production-like)
 
 ```bash
-# Using psql (if you have PostgreSQL client)
-psql $DATABASE_URL -f prisma/migrations/20250120000000_add_enterprise_features/migration.sql
+cd backend
+npx prisma migrate deploy
+npx prisma generate
+```
 
-# Or using Prisma Studio
+### Option 3: Skip Shadow Database Check
+
+If the above doesn't work, you can temporarily disable shadow database:
+
+1. Add to `prisma/schema.prisma`:
+```prisma
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL") // Optional: set to same as DATABASE_URL
+}
+```
+
+2. Or use:
+```bash
+npx prisma migrate dev --name add_coding_assessments --skip-seed --create-only
+# Then manually apply the SQL
+```
+
+### Option 4: Direct SQL Execution
+
+If you have database access, you can run the SQL directly:
+
+```bash
+cd backend
+# The migration SQL is in: prisma/migrations/20250130000000_add_coding_assessments/migration.sql
+# Execute it directly on your database
+```
+
+Then mark it as applied:
+```bash
+npx prisma migrate resolve --applied 20250130000000_add_coding_assessments
+npx prisma generate
+```
+
+## Verify Migration
+
+After migration, verify the table was created:
+
+```bash
 npx prisma studio
-# Then run the SQL manually
+# Or check in your database client
 ```
 
-### Option 3: Mark Migration as Applied
-If you've already applied the migration manually:
+You should see the `coding_assessments` table with all fields.
 
-```bash
-npx prisma migrate resolve --applied 20250120000000_add_enterprise_features
-npx prisma generate
-```
+## Next Steps
 
-### Option 4: Disable Shadow Database (For Neon/Managed Databases)
-Add to your `.env` file:
-
-```env
-# Disable shadow database for Neon
-PRISMA_MIGRATE_SKIP_GENERATE=1
-```
-
-Then use `prisma db push` instead of `prisma migrate dev`.
-
-## After Migration
-
-1. Generate Prisma Client:
-   ```bash
-   npx prisma generate
-   ```
-
-2. Verify the tables were created:
-   ```bash
-   npx prisma studio
-   ```
-
-3. Check the new tables:
-   - `audit_logs`
-   - `permissions`
-   - `roles`
-   - `role_permissions`
-   - `user_roles`
-   - `webhooks`
-   - `webhook_deliveries`
-
-## Troubleshooting
-
-If you still encounter issues:
-
-1. **Check database connection**: Ensure `DATABASE_URL` in `.env` is correct
-2. **Check permissions**: Ensure your database user has CREATE TABLE permissions
-3. **Use db push**: For development, `db push` is often simpler than migrations
-4. **Check existing tables**: Ensure base tables (users, jobs, etc.) exist first
+After successful migration:
+1. ✅ Run `npx prisma generate` to update Prisma Client
+2. ✅ Restart your backend server
+3. ✅ Test creating an assessment
