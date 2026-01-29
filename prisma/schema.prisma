@@ -68,6 +68,13 @@ model User {
   analytics          AnalyticsMetric[]     @relation("UserAnalytics")
   aiChats            AIAssistantChat[]    @relation("AIAssistantChats")
   assessments        CodingAssessment[]   @relation("AssessmentRecruiter")
+  roleSpecs          RoleSpec[]           @relation("RoleSpecClient")
+  lockedRoleSpecs    RoleSpec[]           @relation("RoleSpecLockedBy")
+  evaluationPolicies EvaluationPolicy[]   @relation("EvaluationPolicyClient")
+  lockedEvaluationPolicies EvaluationPolicy[] @relation("EvaluationPolicyLockedBy")
+  certifiedProfiles  CertifiedProfile[]   @relation("CertifiedProfileCertifiedBy")
+  hiringDecisions    HiringDecision[]      @relation("HiringDecisionMadeBy")
+  evaluationBlueprints EvaluationBlueprint[] @relation("EvaluationBlueprintClient")
 
   @@map("users")
 }
@@ -116,6 +123,12 @@ model Job {
   interviews Interview[]
   insights   CandidateInsight[]
   assessments CodingAssessment[]
+  roleSpecId  String?  @db.Uuid
+  roleSpec    RoleSpec? @relation(fields: [roleSpecId], references: [id], onDelete: SetNull)
+  evaluationPolicyId String? @db.Uuid
+  evaluationPolicy   EvaluationPolicy? @relation(fields: [evaluationPolicyId], references: [id], onDelete: SetNull)
+  certifiedProfiles  CertifiedProfile[]
+  hiringDecisions    HiringDecision[]
 
   // Metadata
   createdAt DateTime @default(now()) @db.Timestamp(6)
@@ -150,6 +163,8 @@ model Candidate {
   activityLogs    ActivityLog[]
   insights        CandidateInsight[]
   assessments     CodingAssessment[]
+  certifiedProfiles CertifiedProfile[]
+  hiringDecisions   HiringDecision[]
 
   @@index([jobId], map: "IDX_CANDIDATES_JOB_ID")
   @@index([status], map: "IDX_CANDIDATES_STATUS")
@@ -188,6 +203,9 @@ model Interview {
   client                   User              @relation("InterviewClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   template                 InterviewTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
   assessments              CodingAssessment[]
+  scoreEvidence            ScoreEvidence[] @relation("ScoreEvidenceInterview")
+  evaluationBlueprintId    String?           @db.Uuid
+  evaluationBlueprint      EvaluationBlueprint? @relation(fields: [evaluationBlueprintId], references: [id], onDelete: SetNull)
 
   @@index([candidateId], map: "IDX_INTERVIEWS_CANDIDATE_ID")
   @@index([clientId], map: "IDX_INTERVIEWS_CLIENT_ID")
@@ -229,6 +247,7 @@ model CodingAssessment {
   job             Job                   @relation(fields: [jobId], references: [id], onDelete: Cascade)
   interview       Interview?            @relation(fields: [interviewId], references: [id], onDelete: SetNull)
   recruiter       User                  @relation("AssessmentRecruiter", fields: [recruiterId], references: [id], onDelete: Cascade)
+  scoreEvidence   ScoreEvidence[] @relation("ScoreEvidenceAssessment")
   
   @@index([candidateId], map: "IDX_ASSESSMENT_CANDIDATE")
   @@index([jobId], map: "IDX_ASSESSMENT_JOB")
@@ -429,6 +448,39 @@ enum UserRole {
   recruiter
   client
   interviewee
+}
+
+enum RoleSpecStatus {
+  draft
+  locked
+  archived
+}
+
+enum RoleSpecSource {
+  new
+  template
+  clone
+}
+
+enum ProfileCertificationStatus {
+  pending
+  certified
+  rejected
+  expired
+}
+
+enum HiringDecisionStatus {
+  pending
+  approved
+  rejected
+  on_hold
+}
+
+enum HiringDecisionType {
+  hire
+  reject
+  hold
+  offer_pending
 }
 
 model AuditLog {
@@ -756,4 +808,290 @@ model WhiteLabelConfig {
   company         Company  @relation(fields: [companyId], references: [id], onDelete: Cascade)
   
   @@map("white_label_configs")
+}
+
+// Role Specification System (S1)
+model RoleSpec {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  version         Int             @default(1)
+  status          RoleSpecStatus  @default(draft)
+  source          RoleSpecSource  @default(new)
+  
+  // Basic Info
+  title           String          @db.VarChar(255)
+  department      String?         @db.VarChar(100)
+  seniorityLevel  SeniorityLevel
+  location        String?         @db.VarChar(100)
+  employmentType  JobType
+  workMode        WorkMode
+  
+  // Description
+  jobDescription  String          @db.Text
+  
+  // Skills
+  mustHaveSkills  String[]        // Required skills
+  niceToHaveSkills String[]      // Preferred skills
+  
+  // Metadata
+  clientId       String           @db.Uuid
+  templateId     String?          @db.Uuid // If created from template
+  clonedFromId   String?          @db.Uuid // If cloned from another role
+  lockedAt       DateTime?        @db.Timestamp(6)
+  lockedBy       String?         @db.Uuid
+  validatedAt    DateTime?        @db.Timestamp(6)
+  evaluationPolicyId String?      @db.Uuid
+  
+  // Relations
+  client         User             @relation("RoleSpecClient", fields: [clientId], references: [id], onDelete: Cascade)
+  lockedByUser   User?            @relation("RoleSpecLockedBy", fields: [lockedBy], references: [id], onDelete: SetNull)
+  template       RoleSpec?        @relation("RoleSpecTemplate", fields: [templateId], references: [id], onDelete: SetNull)
+  templates      RoleSpec[]       @relation("RoleSpecTemplate")
+  clonedFrom     RoleSpec?        @relation("RoleSpecClone", fields: [clonedFromId], references: [id], onDelete: SetNull)
+  clones         RoleSpec[]       @relation("RoleSpecClone")
+  jobs           Job[]
+  evaluationPolicy EvaluationPolicy? @relation(fields: [evaluationPolicyId], references: [id], onDelete: SetNull)
+  evaluationBlueprints EvaluationBlueprint[]
+  rolePackId     String?          @db.Uuid
+  rolePack       RolePack?        @relation(fields: [rolePackId], references: [id], onDelete: SetNull)
+  
+  createdAt      DateTime         @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime         @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@unique([id, version], map: "UQ_ROLE_SPEC_VERSION")
+  @@index([clientId], map: "IDX_ROLE_SPEC_CLIENT")
+  @@index([status], map: "IDX_ROLE_SPEC_STATUS")
+  @@index([templateId], map: "IDX_ROLE_SPEC_TEMPLATE")
+  @@map("role_specs")
+}
+
+model RolePack {
+  id              String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String          @db.VarChar(255)
+  description     String?         @db.Text
+  category        String          @db.VarChar(100) // e.g., "Software Engineering", "Sales"
+  isPublic        Boolean         @default(false)
+  isDefault       Boolean         @default(false)
+  organizationId  String?         @db.Uuid
+  roleSpecs       RoleSpec[]
+  createdAt       DateTime        @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime        @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@index([category], map: "IDX_ROLE_PACK_CATEGORY")
+  @@index([organizationId], map: "IDX_ROLE_PACK_ORG")
+  @@map("role_packs")
+}
+
+// Evaluation Policy System (S2)
+model EvaluationPolicy {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String   @db.VarChar(255)
+  description     String?  @db.Text
+  version         Int      @default(1)
+  
+  // Score Weights (must sum to 100)
+  technicalWeight      Float   @default(40)  // 0-100
+  communicationWeight  Float   @default(25)  // 0-100
+  problemSolvingWeight Float   @default(20)  // 0-100
+  culturalFitWeight    Float   @default(15)  // 0-100
+  
+  // Scoring Rules
+  minPassingScore      Float   @default(70)  // Minimum overall score to pass
+  scoreNormalization   Boolean @default(true) // Normalize scores to 0-100
+  
+  // Evidence Requirements
+  requireEvidence      Boolean @default(true)  // Require evidence for scores
+  evidenceConfidenceThreshold Float @default(0.7) // Min confidence for evidence
+  
+  // Policy Metadata
+  clientId       String   @db.Uuid
+  isDefault      Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  lockedAt       DateTime? @db.Timestamp(6)
+  lockedBy       String?  @db.Uuid
+  
+  // Relations
+  client         User     @relation("EvaluationPolicyClient", fields: [clientId], references: [id], onDelete: Cascade)
+  lockedByUser   User?    @relation("EvaluationPolicyLockedBy", fields: [lockedBy], references: [id], onDelete: SetNull)
+  roleSpecs      RoleSpec[]
+  jobs           Job[]
+  
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@index([clientId], map: "IDX_EVAL_POLICY_CLIENT")
+  @@index([isDefault], map: "IDX_EVAL_POLICY_DEFAULT")
+  @@index([isActive], map: "IDX_EVAL_POLICY_ACTIVE")
+  @@map("evaluation_policies")
+}
+
+// Evidence-Based Scoring (S15)
+model ScoreEvidence {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scoreId         String   @db.VarChar(255) // Reference to score (e.g., "interview_123_overall")
+  scoreType       String   @db.VarChar(50) // 'technical', 'communication', 'problemSolving', 'culturalFit', 'overall'
+  scoreValue      Float
+  
+  // Evidence References
+  evidenceType    String   @db.VarChar(50) // 'transcript', 'assessment', 'video', 'audio'
+  evidenceSource  String   @db.VarChar(100) // 'interview', 'coding_assessment', 'behavioral_test'
+  evidenceId      String   @db.Uuid // ID of interview, assessment, etc.
+  
+  // Foreign Keys (polymorphic - one will be set based on evidenceSource)
+  interviewId     String?  @db.Uuid
+  assessmentId    String?  @db.Uuid
+  
+  // Evidence Snippets
+  transcriptSnippet String? @db.Text // Relevant transcript excerpt
+  timestampStart    Float?  // Start time in seconds
+  timestampEnd       Float?  // End time in seconds
+  
+  // Confidence
+  confidence       Float    @default(1.0) // 0-1, how confident is this evidence
+  
+  // Immutability
+  isImmutable      Boolean  @default(true)
+  createdAt         DateTime @default(now()) @db.Timestamp(6)
+  
+  // Relations
+  interview       Interview? @relation("ScoreEvidenceInterview", fields: [interviewId], references: [id], onDelete: Cascade)
+  assessment      CodingAssessment? @relation("ScoreEvidenceAssessment", fields: [assessmentId], references: [id], onDelete: Cascade)
+  
+  @@index([scoreId], map: "IDX_EVIDENCE_SCORE")
+  @@index([evidenceId], map: "IDX_EVIDENCE_SOURCE")
+  @@index([scoreType], map: "IDX_EVIDENCE_TYPE")
+  @@map("score_evidence")
+}
+
+// Certified Profile System (S17)
+model CertifiedProfile {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId           String   @db.Uuid
+  jobId                 String   @db.Uuid
+  
+  // Certification Data (Read-only after certification)
+  scores                Json     // Immutable scores
+  evidenceSummary       Json     // Summary of evidence
+  ranking               Int       // Position in ranking
+  rankingSnapshotId     String?  @db.Uuid
+  
+  // Certification Metadata
+  status                ProfileCertificationStatus @default(pending)
+  certifiedAt           DateTime? @db.Timestamp(6)
+  certifiedBy           String?  @db.Uuid
+  expiresAt             DateTime? @db.Timestamp(6)
+  
+  // Relations
+  candidate             Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job                   Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  certifiedByUser       User?     @relation("CertifiedProfileCertifiedBy", fields: [certifiedBy], references: [id], onDelete: SetNull)
+  
+  createdAt             DateTime @default(now()) @db.Timestamp(6)
+  updatedAt             DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@unique([candidateId, jobId], map: "UQ_CERT_PROFILE_CANDIDATE_JOB")
+  @@index([candidateId], map: "IDX_CERT_PROFILE_CANDIDATE")
+  @@index([jobId], map: "IDX_CERT_PROFILE_JOB")
+  @@index([status], map: "IDX_CERT_PROFILE_STATUS")
+  @@map("certified_profiles")
+}
+
+// Skill Taxonomy System (S4)
+model SkillTaxonomy {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  preferredLabel  String   @db.VarChar(255) // Canonical skill name
+  aliases         String[] // Alternative names
+  category        String   @db.VarChar(100) // e.g., "Programming Languages", "Frameworks"
+  description     String?  @db.Text
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@unique([preferredLabel], map: "UQ_SKILL_PREFERRED_LABEL")
+  @@index([category], map: "IDX_SKILL_CATEGORY")
+  @@map("skill_taxonomy")
+}
+
+// Evaluation Blueprint System (S5)
+model EvaluationBlueprint {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String   @db.VarChar(255)
+  description     String?  @db.Text
+  version         Int      @default(1)
+  
+  // Blueprint Structure
+  questionMappings Json    // Maps questions to evaluation criteria
+  skillMappings    Json    // Maps skills to questions
+  scoringRules     Json    // Rules for how to score responses
+  
+  // Metadata
+  clientId       String   @db.Uuid
+  roleSpecId    String?  @db.Uuid
+  isDefault     Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  
+  // Relations
+  client         User     @relation("EvaluationBlueprintClient", fields: [clientId], references: [id], onDelete: Cascade)
+  roleSpec       RoleSpec? @relation(fields: [roleSpecId], references: [id], onDelete: SetNull)
+  interviews     Interview[]
+  
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@index([clientId], map: "IDX_BLUEPRINT_CLIENT")
+  @@index([roleSpecId], map: "IDX_BLUEPRINT_ROLE_SPEC")
+  @@map("evaluation_blueprints")
+}
+
+// Enhanced Ranking System (S16)
+model RankingSnapshot {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId           String   @db.Uuid
+  snapshotDate    DateTime @default(now()) @db.Timestamp(6)
+  
+  // Ranking Data (Immutable)
+  rankings        Json     // Array of { candidateId, rank, score, evidenceConfidence }
+  totalCandidates Int
+  tieBreaks       Json?    // Information about tie-breaking decisions
+  
+  // Metadata
+  createdBy       String?  @db.Uuid
+  isActive        Boolean  @default(true) // Only one active snapshot per job
+  
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  
+  @@index([jobId], map: "IDX_RANKING_JOB")
+  @@index([snapshotDate], map: "IDX_RANKING_DATE")
+  @@index([isActive], map: "IDX_RANKING_ACTIVE")
+  @@map("ranking_snapshots")
+}
+
+// Hiring Decision System (S18)
+model HiringDecision {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId     String   @db.Uuid
+  jobId           String   @db.Uuid
+  
+  // Decision Data
+  decisionType    HiringDecisionType
+  status          HiringDecisionStatus @default(pending)
+  rationale       String   @db.Text // Mandatory rationale
+  
+  // Metadata
+  madeBy          String   @db.Uuid
+  madeAt          DateTime @default(now()) @db.Timestamp(6)
+  overridesAI     Boolean  @default(false) // Whether decision overrides AI recommendation
+  
+  // Relations
+  candidate       Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job             Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  madeByUser      User      @relation("HiringDecisionMadeBy", fields: [madeBy], references: [id], onDelete: Cascade)
+  
+  createdAt       DateTime @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  
+  @@unique([candidateId, jobId], map: "UQ_DECISION_CANDIDATE_JOB")
+  @@index([candidateId], map: "IDX_DECISION_CANDIDATE")
+  @@index([jobId], map: "IDX_DECISION_JOB")
+  @@index([status], map: "IDX_DECISION_STATUS")
+  @@map("hiring_decisions")
 }
