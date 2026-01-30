@@ -68,7 +68,10 @@ export class CandidatesService {
   /**
    * Advanced candidate search with filters
    */
-  async searchCandidates(query: CandidateQueryDto): Promise<{
+  async searchCandidates(
+    query: CandidateQueryDto,
+    user?: { id: string; role: string },
+  ): Promise<{
     data: Candidate[];
     meta: {
       total: number;
@@ -86,6 +89,58 @@ export class CandidatesService {
     // Build where clause
     const where: Prisma.CandidateWhereInput = {};
 
+    // Role-based filtering: filter by user's jobs (except for admin)
+    if (user && user.role !== 'admin') {
+      // Get all job IDs for this user
+      const userJobs = await this.prisma.job.findMany({
+        where: { clientId: user.id },
+        select: { id: true },
+      });
+      const jobIds = userJobs.map(j => j.id);
+      
+      // Only show candidates for user's jobs (if they have any jobs)
+      if (jobIds.length > 0) {
+        // If jobId filter is specified, verify it belongs to user
+        if (query.jobId) {
+          if (jobIds.includes(query.jobId)) {
+            where.jobId = query.jobId;
+          } else {
+            // Job doesn't belong to user, return empty result
+            return {
+              data: [],
+              meta: {
+                total: 0,
+                page,
+                limit,
+                totalPages: 0,
+                hasNextPage: false,
+                hasPreviousPage: false,
+              },
+            };
+          }
+        } else {
+          // Filter by all user's jobs
+          where.jobId = { in: jobIds };
+        }
+      } else {
+        // User has no jobs, return empty result
+        return {
+          data: [],
+          meta: {
+            total: 0,
+            page,
+            limit,
+            totalPages: 0,
+            hasNextPage: false,
+            hasPreviousPage: false,
+          },
+        };
+      }
+    } else if (query.jobId) {
+      // Admin or no user context, but jobId filter specified
+      where.jobId = query.jobId;
+    }
+
     // Text search
     if (query.search) {
       where.OR = [
@@ -99,11 +154,6 @@ export class CandidatesService {
     // Status filter
     if (query.status) {
       where.status = query.status;
-    }
-
-    // Job filter
-    if (query.jobId) {
-      where.jobId = query.jobId;
     }
 
     // Skills filter
@@ -570,6 +620,49 @@ export class CandidatesService {
   /**
    * Upload resume using token (public endpoint)
    */
+  async getCandidateStatusByEmail(email: string) {
+    const normalizedEmail = normalizeEmail(email);
+    
+    const candidate = await this.prisma.candidate.findFirst({
+      where: { email: normalizedEmail },
+      include: {
+        job: {
+          select: {
+            id: true,
+            title: true,
+            description: true,
+          },
+        },
+        interviews: {
+          select: {
+            id: true,
+            status: true,
+            scheduledAt: true,
+            completedAt: true,
+            type: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+        assessments: {
+          select: {
+            id: true,
+            status: true,
+            score: true,
+            question: true,
+          },
+          orderBy: { createdAt: 'desc' },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!candidate) {
+      throw new NotFoundException('No application found for this email');
+    }
+
+    return candidate;
+  }
+
   async uploadResumeByToken(token: string, file: Express.Multer.File) {
     const candidate = await this.verifyResumeUploadToken(token);
     

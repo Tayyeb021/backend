@@ -7,9 +7,11 @@ import {
   UseGuards,
   Request,
   Patch,
+  Query,
 } from '@nestjs/common';
 import { InterviewService } from './interview.service';
 import { CreateInterviewDto } from './dto/update-create-interview.dto';
+import { InterviewQueryDto } from './dto/interview-query.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 @Controller('interviews')
@@ -41,8 +43,8 @@ export class InterviewController {
   }
 
   @Get()
-  async getInterviews(@Request() req) {
-    return this.interviewService.getInterviewsByClient(req.user.id);
+  async getInterviews(@Request() req, @Query() query?: InterviewQueryDto) {
+    return this.interviewService.getInterviewsByClient(req.user.id, query);
   }
 
   @Patch(':id/start')

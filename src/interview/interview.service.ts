@@ -326,12 +326,35 @@ export class InterviewService {
     return interview;
   }
 
-  async getInterviewsByClient(clientId: string): Promise<Interview[]> {
-    return await this.prisma.interview.findMany({
-      where: { clientId },
+  async getInterviewsByClient(
+    clientId: string,
+    query?: { createdAtFrom?: string; createdAtTo?: string; limit?: number },
+  ): Promise<Interview[]> {
+    const where: any = { clientId };
+
+    // Date range filters
+    if (query?.createdAtFrom || query?.createdAtTo) {
+      where.createdAt = {};
+      if (query.createdAtFrom) {
+        where.createdAt.gte = new Date(query.createdAtFrom);
+      }
+      if (query.createdAtTo) {
+        where.createdAt.lte = new Date(query.createdAtTo);
+      }
+    }
+
+    const findManyOptions: any = {
+      where,
       include: { candidate: true, job: true },
       orderBy: { createdAt: 'desc' },
-    });
+    };
+
+    // Apply limit if provided
+    if (query?.limit) {
+      findManyOptions.take = query.limit;
+    }
+
+    return await this.prisma.interview.findMany(findManyOptions);
   }
 
   async getInterviewsByCandidateEmail(candidateEmail: string): Promise<Interview[]> {

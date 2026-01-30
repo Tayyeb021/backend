@@ -41,14 +41,23 @@ export class CandidatesController {
   async getCandidates(
     @Query('jobId') jobId?: string,
     @Query() query?: CandidateQueryDto,
+    @Request() req?: any,
   ) {
     // If jobId is provided, use legacy endpoint
     if (jobId && query && !query.search && !query.status && !query.skills) {
       return this.candidatesService.getCandidatesByJob(jobId);
     }
     
-    // Otherwise use advanced search
-    return this.candidatesService.searchCandidates(query || {});
+    // Otherwise use advanced search with user context
+    return this.candidatesService.searchCandidates(query || {}, req?.user);
+  }
+
+  @Get('my-status')
+  @UseGuards(JwtAuthGuard)
+  async getMyApplicationStatus(@Request() req) {
+    // Get user's email from JWT
+    const userEmail = req.user.email;
+    return this.candidatesService.getCandidateStatusByEmail(userEmail);
   }
 
   @Get(':id')
