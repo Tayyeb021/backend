@@ -26,6 +26,15 @@ export class JobsController {
     return this.jobsService.createJob(createJobDto, req.user.id);
   }
 
+  @Post('from-role-spec/:roleSpecId')
+  async createJobFromRoleSpec(
+    @Param('roleSpecId') roleSpecId: string,
+    @Request() req,
+    @Body() overrides?: Partial<CreateJobDto>,
+  ) {
+    return this.jobsService.createJobFromRoleSpec(roleSpecId, req.user.id, overrides);
+  }
+
   @Get()
   async getJobs(@Request() req, @Query() query: JobQueryDto) {
     return this.jobsService.getJobsByClient(req.user.id, query);

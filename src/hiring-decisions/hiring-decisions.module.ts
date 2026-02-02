@@ -4,7 +4,9 @@ import { HiringDecisionsService } from './hiring-decisions.service';
 import { PrismaModule } from '../prisma/prisma.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [
+    PrismaModule,
+  ],
   controllers: [HiringDecisionsController],
   providers: [HiringDecisionsService],
   exports: [HiringDecisionsService],

@@ -22,12 +22,15 @@ export class MarketIntelligenceService {
     experienceLevel?: string,
     industry?: string,
   ) {
-    // Check if we have cached data
-    const existing = await this.prisma.marketIntelligence.findFirst({
+    // Check if we have cached data (normalize experienceLevel for lookup)
+    const normalizedExperienceLevel = experienceLevel || 'all';
+    const existing = await this.prisma.marketIntelligence.findUnique({
       where: {
-        jobTitle,
-        location,
-        experienceLevel: experienceLevel || null,
+        jobTitle_location_experienceLevel: {
+          jobTitle,
+          location,
+          experienceLevel: normalizedExperienceLevel,
+        },
       },
     });
 
@@ -67,42 +70,62 @@ export class MarketIntelligenceService {
     // Combine AI analysis with real data
     const combinedData = this.combineMarketData(marketData, jobData);
 
-    // Save or update
-    return this.prisma.marketIntelligence.upsert({
+    // Use 'all' as default for experienceLevel to avoid null in unique constraint
+    const normalizedExperienceLevel = experienceLevel || 'all';
+
+    // Check if record exists first
+    const existing = await this.prisma.marketIntelligence.findUnique({
       where: {
         jobTitle_location_experienceLevel: {
           jobTitle,
           location,
-          experienceLevel: (experienceLevel || null) as any,
+          experienceLevel: normalizedExperienceLevel,
         },
       },
-      create: {
-        jobTitle,
-        location,
-        industry,
-        experienceLevel,
-        avgSalary: combinedData.avgSalary,
-        minSalary: combinedData.minSalary,
-        maxSalary: combinedData.maxSalary,
-        demandTrend: combinedData.demandTrend,
-        skillDemand: combinedData.skillDemand as any,
-        marketData: combinedData.additionalData as any,
-        source: 'ai_analysis',
-      },
-      update: {
-        avgSalary: combinedData.avgSalary,
-        minSalary: combinedData.minSalary,
-        maxSalary: combinedData.maxSalary,
-        demandTrend: combinedData.demandTrend,
-        skillDemand: combinedData.skillDemand as any,
-        marketData: combinedData.additionalData as any,
-        updatedAt: new Date(),
-      },
     });
+
+    if (existing) {
+      // Update existing record
+      return this.prisma.marketIntelligence.update({
+        where: {
+          jobTitle_location_experienceLevel: {
+            jobTitle,
+            location,
+            experienceLevel: normalizedExperienceLevel,
+          },
+        },
+        data: {
+          avgSalary: combinedData.avgSalary,
+          minSalary: combinedData.minSalary,
+          maxSalary: combinedData.maxSalary,
+          demandTrend: combinedData.demandTrend,
+          skillDemand: combinedData.skillDemand as any,
+          marketData: combinedData.additionalData as any,
+          updatedAt: new Date(),
+        },
+      });
+    } else {
+      // Create new record
+      return this.prisma.marketIntelligence.create({
+        data: {
+          jobTitle,
+          location,
+          industry: industry || null,
+          experienceLevel: normalizedExperienceLevel,
+          avgSalary: combinedData.avgSalary,
+          minSalary: combinedData.minSalary,
+          maxSalary: combinedData.maxSalary,
+          demandTrend: combinedData.demandTrend,
+          skillDemand: combinedData.skillDemand as any,
+          marketData: combinedData.additionalData as any,
+          source: 'ai_analysis',
+        },
+      });
+    }
   }
 
   /**
-   * Analyze market using AI
+   * Analyze market using AI - Generic for all locations
    */
   private async analyzeMarketWithAI(
     jobTitle: string,
@@ -111,44 +134,92 @@ export class MarketIntelligenceService {
     industry?: string,
   ) {
     if (!this.genAI) {
-      return this.getDefaultMarketData();
+      return this.getDefaultMarketData(location);
     }
 
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
-      const prompt = `Analyze the job market for this position in GCC/UAE region.
+      // Use gemini-1.5-flash for faster responses, or gemini-1.5-pro for better quality
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+      
+      // Determine currency based on location
+      const currency = this.getCurrencyForLocation(location);
+      
+      const prompt = `You are a market intelligence analyst. Analyze the current job market data for the following position and provide comprehensive market intelligence.
 
 Job Title: ${jobTitle}
 Location: ${location}
 Experience Level: ${experienceLevel || 'Not specified'}
 Industry: ${industry || 'Not specified'}
 
-Provide market intelligence data in JSON format:
+Based on current market data, job postings, salary surveys, and industry reports for ${location}, extract and provide the following information:
+
+1. Salary Range: Provide realistic salary figures in ${currency} based on the location's market rates. Consider:
+   - Cost of living in ${location}
+   - Industry standards for ${location}
+   - Experience level impact on salary
+   - Current market conditions
+
+2. Demand Trend: Analyze if demand for this role is increasing, stable, or decreasing based on:
+   - Job posting trends
+   - Industry growth
+   - Economic factors in ${location}
+
+3. Skills Demand: Identify the top 8-12 most in-demand skills for this role in ${location}, with demand percentages (0-100) based on:
+   - Frequency in job postings
+   - Industry requirements
+   - Emerging technologies
+
+4. Market Insights: Provide actionable insights including:
+   - Market summary
+   - Key trends
+   - Opportunities
+   - Challenges
+
+Return ONLY valid JSON in this exact format (no markdown, no code blocks, no explanations):
 {
-  "avgSalary": number (in AED),
-  "minSalary": number,
-  "maxSalary": number,
+  "avgSalary": <number>,
+  "minSalary": <number>,
+  "maxSalary": <number>,
   "demandTrend": "increasing" | "stable" | "decreasing",
   "skillDemand": {
-    "skill1": 0-100,
-    "skill2": 0-100
+    "<skill_name>": <0-100>,
+    "<skill_name>": <0-100>
   },
   "marketInsights": {
-    "summary": "brief market summary",
-    "trends": ["trend1", "trend2"],
-    "opportunities": ["opp1", "opp2"]
+    "summary": "<brief market summary for this role in this location>",
+    "trends": ["<trend1>", "<trend2>", "<trend3>"],
+    "opportunities": ["<opportunity1>", "<opportunity2>"],
+    "challenges": ["<challenge1>", "<challenge2>"],
+    "currency": "${currency}",
+    "location": "${location}"
   }
 }
 
-Return only valid JSON, no markdown.`;
+Important: 
+- Use realistic, data-driven figures based on ${location} market
+- Ensure minSalary < avgSalary < maxSalary
+- Skill demand percentages should sum to a reasonable total
+- Be specific to ${location} market conditions
+- Return ONLY the JSON object, nothing else`;
 
       const result = await model.generateContent(prompt);
       const response = await result.response;
-      const text = response
-        .text()
+      let text = response.text();
+      
+      // Clean up the response
+      text = text
         .replace(/```json\n?/g, '')
         .replace(/```\n?/g, '')
+        .replace(/^[^{]*/, '') // Remove any text before first {
+        .replace(/[^}]*$/, '') // Remove any text after last }
         .trim();
+      
+      // Try to extract JSON if wrapped
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        text = jsonMatch[0];
+      }
+      
       const data = JSON.parse(text);
 
       return {
@@ -157,12 +228,70 @@ Return only valid JSON, no markdown.`;
         maxSalary: data.maxSalary || 0,
         demandTrend: data.demandTrend || 'stable',
         skillDemand: data.skillDemand || {},
-        additionalData: data.marketInsights || {},
+        additionalData: {
+          ...(data.marketInsights || {}),
+          currency: currency,
+          location: location,
+        },
       };
     } catch (error: any) {
       console.error('AI market analysis failed:', error);
-      return this.getDefaultMarketData();
+      console.error('Response text:', error.response?.text || error.message);
+      return this.getDefaultMarketData(location);
     }
+  }
+
+  /**
+   * Get currency for location
+   */
+  private getCurrencyForLocation(location: string): string {
+    const locationUpper = location.toUpperCase();
+    
+    // GCC countries
+    if (locationUpper.includes('UAE') || locationUpper.includes('UNITED ARAB EMIRATES') || locationUpper.includes('DUBAI') || locationUpper.includes('ABU DHABI')) {
+      return 'AED';
+    }
+    if (locationUpper.includes('SAUDI') || locationUpper.includes('KSA') || locationUpper.includes('RIYADH')) {
+      return 'SAR';
+    }
+    if (locationUpper.includes('KUWAIT')) {
+      return 'KWD';
+    }
+    if (locationUpper.includes('BAHRAIN')) {
+      return 'BHD';
+    }
+    if (locationUpper.includes('OMAN')) {
+      return 'OMR';
+    }
+    if (locationUpper.includes('QATAR') || locationUpper.includes('DOHA')) {
+      return 'QAR';
+    }
+    
+    // Other common locations
+    if (locationUpper.includes('USA') || locationUpper.includes('UNITED STATES') || locationUpper.includes('US')) {
+      return 'USD';
+    }
+    if (locationUpper.includes('UK') || locationUpper.includes('UNITED KINGDOM') || locationUpper.includes('LONDON')) {
+      return 'GBP';
+    }
+    if (locationUpper.includes('EUROPE') || locationUpper.includes('EU')) {
+      return 'EUR';
+    }
+    if (locationUpper.includes('INDIA') || locationUpper.includes('MUMBAI') || locationUpper.includes('BANGALORE')) {
+      return 'INR';
+    }
+    if (locationUpper.includes('SINGAPORE')) {
+      return 'SGD';
+    }
+    if (locationUpper.includes('AUSTRALIA') || locationUpper.includes('SYDNEY')) {
+      return 'AUD';
+    }
+    if (locationUpper.includes('CANADA') || locationUpper.includes('TORONTO')) {
+      return 'CAD';
+    }
+    
+    // Default to AED for GCC region or unknown
+    return 'AED';
   }
 
   /**
@@ -262,14 +391,24 @@ Return only valid JSON, no markdown.`;
   /**
    * Get default market data when AI unavailable
    */
-  private getDefaultMarketData() {
+  private getDefaultMarketData(location: string = 'UAE') {
+    const currency = this.getCurrencyForLocation(location);
+    // Default values in AED, will be converted if needed
+    const baseAvg = 15000;
+    const baseMin = 10000;
+    const baseMax = 20000;
+    
     return {
-      avgSalary: 15000,
-      minSalary: 10000,
-      maxSalary: 20000,
+      avgSalary: baseAvg,
+      minSalary: baseMin,
+      maxSalary: baseMax,
       demandTrend: 'stable',
       skillDemand: {},
-      additionalData: {},
+      additionalData: {
+        currency: currency,
+        location: location,
+        summary: 'Market data unavailable. Please try again or check your input.',
+      },
     };
   }
 
@@ -296,6 +435,10 @@ Return only valid JSON, no markdown.`;
       experienceLevel,
     );
 
+    const currency = this.getCurrencyForLocation(location);
+    const marketData = data.marketData as any || {};
+    const dataCurrency = marketData.currency || currency;
+
     return {
       jobTitle,
       location,
@@ -306,7 +449,7 @@ Return only valid JSON, no markdown.`;
       percentile25: data.minSalary,
       percentile50: data.avgSalary,
       percentile75: data.maxSalary,
-      currency: 'AED',
+      currency: dataCurrency,
     };
   }
 

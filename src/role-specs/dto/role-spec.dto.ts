@@ -1,4 +1,5 @@
 import { IsString, IsArray, IsOptional, IsEnum, IsNotEmpty } from 'class-validator';
+import { SeniorityLevel, JobType, WorkMode } from '@prisma/client';
 
 export class CreateRoleSpecDto {
   @IsString()
@@ -9,18 +10,18 @@ export class CreateRoleSpecDto {
   @IsOptional()
   department?: string;
 
-  @IsEnum(['junior', 'mid', 'senior', 'expert'])
-  seniorityLevel: string;
+  @IsEnum(SeniorityLevel)
+  seniorityLevel: SeniorityLevel;
 
   @IsString()
   @IsOptional()
   location?: string;
 
-  @IsEnum(['full_time', 'part_time', 'contract', 'freelance'])
-  employmentType: string;
+  @IsEnum(JobType)
+  employmentType: JobType;
 
-  @IsEnum(['remote', 'hybrid', 'onsite'])
-  workMode: string;
+  @IsEnum(WorkMode)
+  workMode: WorkMode;
 
   @IsString()
   @IsNotEmpty()
@@ -35,7 +36,7 @@ export class CreateRoleSpecDto {
   @IsOptional()
   niceToHaveSkills?: string[];
 
-  @IsEnum(['new', 'template', 'clone'])
+  @IsString()
   @IsOptional()
   source?: 'new' | 'template' | 'clone';
 
@@ -61,21 +62,21 @@ export class UpdateRoleSpecDto {
   @IsOptional()
   department?: string;
 
-  @IsEnum(['junior', 'mid', 'senior', 'expert'])
+  @IsEnum(SeniorityLevel)
   @IsOptional()
-  seniorityLevel?: string;
+  seniorityLevel?: SeniorityLevel;
 
   @IsString()
   @IsOptional()
   location?: string;
 
-  @IsEnum(['full_time', 'part_time', 'contract', 'freelance'])
+  @IsEnum(JobType)
   @IsOptional()
-  employmentType?: string;
+  employmentType?: JobType;
 
-  @IsEnum(['remote', 'hybrid', 'onsite'])
+  @IsEnum(WorkMode)
   @IsOptional()
-  workMode?: string;
+  workMode?: WorkMode;
 
   @IsString()
   @IsOptional()

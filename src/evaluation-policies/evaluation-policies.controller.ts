@@ -3,6 +3,7 @@ import {
   Get,
   Post,
   Put,
+  Patch,
   Body,
   Param,
   Query,
@@ -67,5 +68,29 @@ export class EvaluationPoliciesController {
     },
   ) {
     return this.evaluationPoliciesService.calculateScores(id, scores);
+  }
+
+  @Patch(':id/lock')
+  async lockPolicy(@Param('id') id: string, @Request() req: any) {
+    return this.evaluationPoliciesService.lockPolicy(id, req.user.id);
+  }
+
+  @Patch(':id/unlock')
+  async unlockPolicy(@Param('id') id: string, @Request() req: any) {
+    return this.evaluationPoliciesService.unlockPolicy(id, req.user.id);
+  }
+
+  @Get(':id/history')
+  async getPolicyHistory(@Param('id') id: string, @Request() req: any) {
+    return this.evaluationPoliciesService.getPolicyHistory(id, req.user.id);
+  }
+
+  @Post(':id/version')
+  async createPolicyVersion(
+    @Param('id') id: string,
+    @Request() req: any,
+    @Body() updates: any,
+  ) {
+    return this.evaluationPoliciesService.createPolicyVersion(id, updates, req.user.id);
   }
 }

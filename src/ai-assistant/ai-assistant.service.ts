@@ -63,7 +63,7 @@ export class AIAssistantService {
     }
 
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
       // Build context prompt
       const contextPrompt = this.buildContextPrompt(context);
@@ -74,20 +74,45 @@ export class AIAssistantService {
         .map((h) => `${h.messageType}: ${h.message}`)
         .join('\n');
 
-      const prompt = `You are an AI assistant for a recruitment platform (Falcon AI Recruiter). Help recruiters with:
+      const prompt = `You are an expert AI recruitment assistant for Falcon AI Recruiter, a comprehensive talent acquisition platform. Your role is to help recruiters, hiring managers, and talent acquisition professionals with all aspects of the recruitment process.
 
-1. Interview preparation tips
-2. Candidate search and filtering
-3. Analytics and metrics questions
-4. Best practices for hiring
-5. Platform usage guidance
+**Your Expertise:**
+- Recruitment best practices and industry standards
+- Interview techniques and candidate evaluation
+- Talent sourcing strategies
+- Market intelligence and salary benchmarking
+- Candidate assessment and screening
+- Hiring metrics and analytics
+- Platform features and workflows
+- Compliance and legal considerations in hiring
 
+**Platform Features You Can Help With:**
+1. **Job Management**: Creating job postings, managing job pipelines, using role specifications
+2. **Candidate Sourcing**: Finding candidates, using sourcing platforms, candidate matching
+3. **Interview Management**: Scheduling interviews, conducting AI-powered interviews, evaluating candidates
+4. **Analytics**: Understanding metrics like time-to-hire, cost-per-hire, quality-of-hire, source effectiveness
+5. **Market Intelligence**: Salary benchmarking, skills demand, market trends by location
+6. **Automation**: Setting up automation rules for workflow optimization
+7. **Evaluation**: Using evaluation policies, blueprints, and role specs
+8. **Assessments**: Coding assessments, technical evaluations
+9. **Pipeline Management**: Managing candidate stages, status updates, workflow optimization
+
+**Your Communication Style:**
+- Be professional, helpful, and concise
+- Provide actionable advice specific to recruitment
+- Reference platform features when relevant
+- Use recruitment industry terminology appropriately
+- Offer step-by-step guidance when needed
+- Be empathetic to recruiter challenges
+
+**Context Information:**
 ${contextPrompt}
 
-${historyText ? `Previous conversation:\n${historyText}\n\n` : ''}
+${historyText ? `**Previous Conversation:**\n${historyText}\n\n` : ''}
 
-User: ${message}
-Assistant:`;
+**User Question:** ${message}
+
+**Your Response (be specific, actionable, and recruitment-focused):**`;
 
       const result = await model.generateContent(prompt);
       const response = await result.response;
@@ -105,23 +130,40 @@ Assistant:`;
     let prompt = '';
 
     if (context.stats) {
-      prompt += `User Statistics:
-- Total Jobs: ${context.stats.totalJobs || 0}
+      prompt += `**Recruiter Statistics:**
+- Total Jobs Posted: ${context.stats.totalJobs || 0}
 - Total Candidates: ${context.stats.totalCandidates || 0}
-- Total Interviews: ${context.stats.totalInterviews || 0}
-- Active Jobs: ${context.stats.activeJobs || 0}
+- Total Interviews Conducted: ${context.stats.totalInterviews || 0}
+- Active Job Postings: ${context.stats.activeJobs || 0}
+- Completed Interviews: ${context.stats.completedInterviews || 0}
+- Advanced Candidates: ${context.stats.advancedCandidates || 0}
+- Conversion Rate: ${context.stats.conversionRate || 0}%
+
+`;
+    }
+
+    if (context.recentJobs && context.recentJobs.length > 0) {
+      prompt += `**Recent Job Postings:**
+${context.recentJobs.map((job: any) => `- ${job.title} (${job.status})`).join('\n')}
+
+`;
+    }
+
+    if (context.topSkills && context.topSkills.length > 0) {
+      prompt += `**Most Sought Skills in Pipeline:**
+${context.topSkills.slice(0, 5).join(', ')}
 
 `;
     }
 
     if (context.recentActivity) {
-      prompt += `Recent Activity:
+      prompt += `**Recent Activity:**
 ${context.recentActivity.map((a: string) => `- ${a}`).join('\n')}
 
 `;
     }
 
-    return prompt;
+    return prompt || 'No specific context available. Provide general recruitment advice.';
   }
 
   /**
@@ -132,18 +174,55 @@ ${context.recentActivity.map((a: string) => `- ${a}`).join('\n')}
       return providedContext;
     }
 
-    // Fetch user stats
-    const [totalJobs, totalCandidates, totalInterviews, activeJobs] =
-      await Promise.all([
-        this.prisma.job.count({ where: { clientId: userId } }),
-        this.prisma.candidate.count({
-          where: { job: { clientId: userId } },
-        }),
-        this.prisma.interview.count({ where: { clientId: userId } }),
-        this.prisma.job.count({
-          where: { clientId: userId, status: 'published' },
-        }),
-      ]);
+    // Fetch comprehensive user stats
+    const [
+      totalJobs,
+      totalCandidates,
+      totalInterviews,
+      activeJobs,
+      completedInterviews,
+      advancedCandidates,
+      recentJobs,
+      topSkills,
+    ] = await Promise.all([
+      this.prisma.job.count({ where: { clientId: userId } }),
+      this.prisma.candidate.count({
+        where: { job: { clientId: userId } },
+      }),
+      this.prisma.interview.count({ where: { clientId: userId } }),
+      this.prisma.job.count({
+        where: { clientId: userId, status: 'published' },
+      }),
+      this.prisma.interview.count({
+        where: { clientId: userId, status: 'completed' },
+      }),
+      this.prisma.candidate.count({
+        where: { job: { clientId: userId }, status: 'advanced' },
+      }),
+      this.prisma.job.findMany({
+        where: { clientId: userId },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+        select: { id: true, title: true, status: true },
+      }),
+      this.prisma.candidate.findMany({
+        where: { job: { clientId: userId } },
+        select: { skills: true },
+        take: 100,
+      }),
+    ]);
+
+    // Extract top skills
+    const skillCounts: Record<string, number> = {};
+    topSkills.forEach((candidate) => {
+      candidate.skills.forEach((skill: string) => {
+        skillCounts[skill] = (skillCounts[skill] || 0) + 1;
+      });
+    });
+    const topSkillsList = Object.entries(skillCounts)
+      .sort(([, a], [, b]) => b - a)
+      .slice(0, 10)
+      .map(([skill]) => skill);
 
     return {
       stats: {
@@ -151,7 +230,17 @@ ${context.recentActivity.map((a: string) => `- ${a}`).join('\n')}
         totalCandidates,
         totalInterviews,
         activeJobs,
+        completedInterviews,
+        advancedCandidates,
+        conversionRate: totalCandidates > 0 
+          ? ((advancedCandidates / totalCandidates) * 100).toFixed(1) 
+          : '0',
       },
+      recentJobs: recentJobs.map((job) => ({
+        title: job.title,
+        status: job.status,
+      })),
+      topSkills: topSkillsList,
     };
   }
 
@@ -200,19 +289,31 @@ ${context.recentActivity.map((a: string) => `- ${a}`).join('\n')}
   private getDefaultResponse(message: string): string {
     const lowerMessage = message.toLowerCase();
 
-    if (lowerMessage.includes('interview')) {
-      return 'For interview preparation, I recommend reviewing the candidate\'s profile, preparing questions based on the job requirements, and using our AI interview templates. Would you like help with a specific aspect?';
+    if (lowerMessage.includes('interview') || lowerMessage.includes('conduct')) {
+      return 'For interview preparation, I recommend:\n\n1. Review the candidate\'s profile and resume thoroughly\n2. Prepare questions based on the job requirements and role specifications\n3. Use our AI-powered interview templates for structured evaluations\n4. Set up evaluation blueprints to ensure consistent scoring\n5. Review the candidate\'s skills against the must-have and nice-to-have requirements\n\nWould you like help with interview questions, evaluation criteria, or scheduling?';
     }
 
-    if (lowerMessage.includes('candidate') || lowerMessage.includes('search')) {
-      return 'To search for candidates, use the Candidates page and apply filters by skills, experience, or location. You can also use our AI matching algorithm to find the best fits for your jobs.';
+    if (lowerMessage.includes('candidate') || lowerMessage.includes('search') || lowerMessage.includes('source')) {
+      return 'To find and source candidates effectively:\n\n1. Use the Candidates page with filters for skills, experience level, location, and status\n2. Leverage our AI matching algorithm that scores candidates against job requirements\n3. Check Market Intelligence for skills demand and salary benchmarks\n4. Use automation rules to automatically advance high-scoring candidates\n5. Review candidate insights for success probability and team fit\n\nWould you like help with specific sourcing strategies or candidate evaluation?';
     }
 
-    if (lowerMessage.includes('analytics') || lowerMessage.includes('metric')) {
-      return 'You can view analytics on the Analytics Dashboard. Key metrics include time-to-hire, cost-per-hire, and quality-of-hire. Would you like help interpreting any specific metric?';
+    if (lowerMessage.includes('analytics') || lowerMessage.includes('metric') || lowerMessage.includes('kpi')) {
+      return 'Key recruitment metrics to track:\n\n1. **Time-to-Hire**: Average days from job posting to offer acceptance\n2. **Cost-per-Hire**: Total recruitment costs divided by number of hires\n3. **Quality-of-Hire**: Average interview scores and candidate performance\n4. **Interview-to-Offer Rate**: Percentage of interviews that result in offers\n5. **Source Effectiveness**: Which channels bring the best candidates\n\nYou can view these on the Analytics Dashboard. Would you like help improving any specific metric?';
     }
 
-    return 'I\'m here to help with your recruitment needs. You can ask me about interviews, candidates, analytics, or platform features. How can I assist you today?';
+    if (lowerMessage.includes('job') || lowerMessage.includes('posting') || lowerMessage.includes('role')) {
+      return 'For creating effective job postings:\n\n1. Use Role Specifications to define clear requirements\n2. Include must-have and nice-to-have skills\n3. Set appropriate seniority level and work mode\n4. Link evaluation policies for consistent candidate assessment\n5. Use Market Intelligence to set competitive salary ranges\n\nWould you like help creating a role spec or optimizing a job posting?';
+    }
+
+    if (lowerMessage.includes('salary') || lowerMessage.includes('compensation') || lowerMessage.includes('market')) {
+      return 'For salary benchmarking and market intelligence:\n\n1. Use the Market Intelligence feature with job title and location\n2. Review salary ranges (min, avg, max) for your market\n3. Check skills demand percentages to prioritize requirements\n4. Analyze market trends and opportunities\n5. Consider cost-of-living differences by location\n\nWould you like help with salary negotiations or market analysis?';
+    }
+
+    if (lowerMessage.includes('automation') || lowerMessage.includes('workflow')) {
+      return 'Automation can streamline your recruitment:\n\n1. Auto-advance high-scoring candidates (e.g., interview score > 85)\n2. Send automated emails when status changes\n3. Notify team members of important updates\n4. Create activity logs for tracking\n\nSet up rules in the Automation tab. Would you like help creating a specific automation rule?';
+    }
+
+    return 'I\'m your AI recruitment assistant! I can help with:\n\n• Interview preparation and candidate evaluation\n• Sourcing strategies and candidate search\n• Analytics and hiring metrics\n• Job posting optimization\n• Salary benchmarking and market intelligence\n• Automation and workflow optimization\n• Platform features and best practices\n\nWhat would you like help with today?';
   }
 
   /**

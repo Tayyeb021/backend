@@ -212,33 +212,42 @@ export class RoleSpecsService {
    * Get role specifications
    */
   async getRoleSpecs(clientId: string, filters?: { status?: string; search?: string }) {
-    const where: any = { clientId };
-
-    if (filters?.status) {
-      where.status = filters.status;
+    if (!clientId) {
+      throw new BadRequestException('Client ID is required');
     }
 
-    if (filters?.search) {
-      where.OR = [
-        { title: { contains: filters.search, mode: 'insensitive' } },
-        { department: { contains: filters.search, mode: 'insensitive' } },
-        { jobDescription: { contains: filters.search, mode: 'insensitive' } },
-      ];
-    }
+    try {
+      const where: any = { clientId };
 
-    return this.prisma.roleSpec.findMany({
-      where,
-      include: {
-        client: {
-          select: { id: true, email: true, firstName: true, lastName: true },
+      if (filters?.status) {
+        where.status = filters.status;
+      }
+
+      if (filters?.search && filters.search.trim()) {
+        where.OR = [
+          { title: { contains: filters.search, mode: 'insensitive' } },
+          { department: { contains: filters.search, mode: 'insensitive' } },
+          { jobDescription: { contains: filters.search, mode: 'insensitive' } },
+        ];
+      }
+
+      return this.prisma.roleSpec.findMany({
+        where,
+        include: {
+          client: {
+            select: { id: true, email: true, firstName: true, lastName: true },
+          },
+          lockedByUser: {
+            select: { id: true, email: true, firstName: true, lastName: true },
+          },
+          evaluationPolicy: true,
         },
-        lockedByUser: {
-          select: { id: true, email: true, firstName: true, lastName: true },
-        },
-        evaluationPolicy: true,
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
+        orderBy: { updatedAt: 'desc' },
+      });
+    } catch (error: any) {
+      console.error('Error getting role specs:', error);
+      throw new BadRequestException(error.message || 'Failed to get role specifications');
+    }
   }
 
   /**

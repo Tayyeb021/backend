@@ -107,4 +107,90 @@ export class AnalyticsController {
     const companyId = req.user?.companyId;
     return this.analyticsService.calculateSourceEffectiveness(userId, companyId);
   }
+
+  @Get('scores/distribution')
+  async getScoreDistribution(
+    @Request() req: any,
+    @Query('jobId') jobId?: string,
+    @Query('scoreType') scoreType?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const userId = req.user?.id;
+    const companyId = req.user?.companyId;
+    const period = startDate && endDate
+      ? {
+          start: new Date(startDate),
+          end: new Date(endDate),
+        }
+      : undefined;
+    return this.analyticsService.getScoreDistribution(
+      userId,
+      companyId,
+      jobId,
+      (scoreType as any) || 'overall',
+      period,
+    );
+  }
+
+  @Get('scores/trends')
+  async getScoreTrends(
+    @Request() req: any,
+    @Query('jobId') jobId?: string,
+    @Query('scoreType') scoreType?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('groupBy') groupBy?: string,
+  ) {
+    const userId = req.user?.id;
+    const companyId = req.user?.companyId;
+    const period = startDate && endDate
+      ? {
+          start: new Date(startDate),
+          end: new Date(endDate),
+        }
+      : undefined;
+    return this.analyticsService.getScoreTrends(
+      userId,
+      companyId,
+      jobId,
+      (scoreType as any) || 'overall',
+      period,
+      (groupBy as any) || 'week',
+    );
+  }
+
+  @Get('scores/comparison')
+  async getScoreComparison(
+    @Request() req: any,
+    @Query('jobId') jobId: string,
+    @Query('scoreType') scoreType?: string,
+  ) {
+    const userId = req.user?.id;
+    const companyId = req.user?.companyId;
+    return this.analyticsService.getScoreComparison(
+      jobId,
+      userId,
+      companyId,
+      (scoreType as any) || 'overall',
+    );
+  }
+
+  @Get('evidence/quality')
+  async getEvidenceQuality(
+    @Request() req: any,
+    @Query('jobId') jobId?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    const userId = req.user?.id;
+    const companyId = req.user?.companyId;
+    const period = startDate && endDate
+      ? {
+          start: new Date(startDate),
+          end: new Date(endDate),
+        }
+      : undefined;
+    return this.analyticsService.getEvidenceQualityMetrics(userId, companyId, jobId, period);
+  }
 }

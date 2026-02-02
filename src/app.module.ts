@@ -29,6 +29,8 @@ import { SkillTaxonomyModule } from './skill-taxonomy/skill-taxonomy.module';
 import { EvaluationBlueprintsModule } from './evaluation-blueprints/evaluation-blueprints.module';
 import { RankingModule } from './ranking/ranking.module';
 import { HiringDecisionsModule } from './hiring-decisions/hiring-decisions.module';
+import { FeedbackTemplatesModule } from './feedback-templates/feedback-templates.module';
+import { CandidateFeedbackModule } from './candidate-feedback/candidate-feedback.module';
 import { APP_INTERCEPTOR } from '@nestjs/core';
 import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
 
@@ -65,6 +67,8 @@ import { AuditInterceptor } from './enterprise/audit/audit.interceptor';
     EvaluationBlueprintsModule,
     RankingModule,
     HiringDecisionsModule,
+    FeedbackTemplatesModule,
+    CandidateFeedbackModule,
   ],
   controllers: [AppController],
   providers: [

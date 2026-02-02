@@ -63,8 +63,9 @@ export class EvaluationPoliciesService {
 
   /**
    * Update evaluation policy
+   * If policy is locked, creates a new version instead of updating
    */
-  async updatePolicy(id: string, updates: any, clientId: string) {
+  async updatePolicy(id: string, updates: any, clientId: string, createNewVersionIfLocked = true) {
     const policy = await this.prisma.evaluationPolicy.findUnique({ where: { id } });
 
     if (!policy) {
@@ -75,9 +76,18 @@ export class EvaluationPoliciesService {
       throw new BadRequestException('You can only update your own policies');
     }
 
-    // If updating weights, validate sum
+    // Check if policy is locked
+    if (policy.lockedAt && createNewVersionIfLocked) {
+      // Create new version instead of updating locked policy
+      return this.createPolicyVersion(id, updates, clientId);
+    } else if (policy.lockedAt && !createNewVersionIfLocked) {
+      throw new BadRequestException('Cannot update locked policy. Unlock it first or create a new version.');
+    }
+
+    // If updating weights, validate sum with configurable tolerance
     if (updates.technicalWeight || updates.communicationWeight || 
         updates.problemSolvingWeight || updates.culturalFitWeight) {
+      const weightTolerance = updates.weightTolerance ?? 0.5; // Default 0.5% tolerance
       const technicalWeight = updates.technicalWeight ?? policy.technicalWeight;
       const communicationWeight = updates.communicationWeight ?? policy.communicationWeight;
       const problemSolvingWeight = updates.problemSolvingWeight ?? policy.problemSolvingWeight;
@@ -85,9 +95,9 @@ export class EvaluationPoliciesService {
 
       const totalWeight = technicalWeight + communicationWeight + problemSolvingWeight + culturalFitWeight;
 
-      if (Math.abs(totalWeight - 100) > 0.01) {
+      if (Math.abs(totalWeight - 100) > weightTolerance) {
         throw new BadRequestException(
-          `Score weights must sum to 100. Current sum: ${totalWeight}`,
+          `Score weights must sum to 100 (tolerance: ±${weightTolerance}). Current sum: ${totalWeight}`,
         );
       }
     }
@@ -100,11 +110,164 @@ export class EvaluationPoliciesService {
       });
     }
 
+    // Remove weightTolerance from updates before saving
+    const { weightTolerance: _, ...updateData } = updates;
+
     return this.prisma.evaluationPolicy.update({
       where: { id },
       data: {
-        ...updates,
+        ...updateData,
         version: policy.version + 1,
+      },
+    });
+  }
+
+  /**
+   * Create a new version of a locked policy
+   */
+  async createPolicyVersion(originalPolicyId: string, updates: any, clientId: string) {
+    const originalPolicy = await this.prisma.evaluationPolicy.findUnique({
+      where: { id: originalPolicyId },
+    });
+
+    if (!originalPolicy) {
+      throw new BadRequestException('Original policy not found');
+    }
+
+    if (originalPolicy.clientId !== clientId) {
+      throw new BadRequestException('You can only create versions of your own policies');
+    }
+
+    // Validate weights if provided
+    const weightTolerance = updates.weightTolerance ?? 0.5;
+    if (updates.technicalWeight || updates.communicationWeight || 
+        updates.problemSolvingWeight || updates.culturalFitWeight) {
+      const technicalWeight = updates.technicalWeight ?? originalPolicy.technicalWeight;
+      const communicationWeight = updates.communicationWeight ?? originalPolicy.communicationWeight;
+      const problemSolvingWeight = updates.problemSolvingWeight ?? originalPolicy.problemSolvingWeight;
+      const culturalFitWeight = updates.culturalFitWeight ?? originalPolicy.culturalFitWeight;
+
+      const totalWeight = technicalWeight + communicationWeight + problemSolvingWeight + culturalFitWeight;
+
+      if (Math.abs(totalWeight - 100) > weightTolerance) {
+        throw new BadRequestException(
+          `Score weights must sum to 100 (tolerance: ±${weightTolerance}). Current sum: ${totalWeight}`,
+        );
+      }
+    }
+
+    const { weightTolerance: _, ...updateData } = updates;
+
+    // Create new version (new policy with incremented version)
+    return this.prisma.evaluationPolicy.create({
+      data: {
+        name: updates.name || originalPolicy.name,
+        description: updates.description ?? originalPolicy.description,
+        version: originalPolicy.version + 1,
+        technicalWeight: updates.technicalWeight ?? originalPolicy.technicalWeight,
+        communicationWeight: updates.communicationWeight ?? originalPolicy.communicationWeight,
+        problemSolvingWeight: updates.problemSolvingWeight ?? originalPolicy.problemSolvingWeight,
+        culturalFitWeight: updates.culturalFitWeight ?? originalPolicy.culturalFitWeight,
+        minPassingScore: updates.minPassingScore ?? originalPolicy.minPassingScore,
+        scoreNormalization: updates.scoreNormalization ?? originalPolicy.scoreNormalization,
+        requireEvidence: updates.requireEvidence ?? originalPolicy.requireEvidence,
+        evidenceConfidenceThreshold: updates.evidenceConfidenceThreshold ?? originalPolicy.evidenceConfidenceThreshold,
+        clientId: originalPolicy.clientId,
+        isDefault: updates.isDefault ?? false,
+        isActive: true,
+        // New version is not locked by default
+        lockedAt: null,
+        lockedBy: null,
+      },
+    });
+  }
+
+  /**
+   * Lock evaluation policy (make it read-only)
+   */
+  async lockPolicy(id: string, userId: string) {
+    const policy = await this.prisma.evaluationPolicy.findUnique({ where: { id } });
+
+    if (!policy) {
+      throw new BadRequestException('Evaluation policy not found');
+    }
+
+    if (policy.clientId !== userId) {
+      throw new BadRequestException('You can only lock your own policies');
+    }
+
+    if (policy.lockedAt) {
+      throw new BadRequestException('Policy is already locked');
+    }
+
+    return this.prisma.evaluationPolicy.update({
+      where: { id },
+      data: {
+        lockedAt: new Date(),
+        lockedBy: userId,
+      },
+    });
+  }
+
+  /**
+   * Unlock evaluation policy
+   */
+  async unlockPolicy(id: string, userId: string) {
+    const policy = await this.prisma.evaluationPolicy.findUnique({ where: { id } });
+
+    if (!policy) {
+      throw new BadRequestException('Evaluation policy not found');
+    }
+
+    if (policy.clientId !== userId) {
+      throw new BadRequestException('You can only unlock your own policies');
+    }
+
+    if (!policy.lockedAt) {
+      throw new BadRequestException('Policy is not locked');
+    }
+
+    return this.prisma.evaluationPolicy.update({
+      where: { id },
+      data: {
+        lockedAt: null,
+        lockedBy: null,
+      },
+    });
+  }
+
+  /**
+   * Get policy version history
+   */
+  async getPolicyHistory(policyId: string, clientId: string) {
+    const policy = await this.prisma.evaluationPolicy.findUnique({
+      where: { id: policyId },
+    });
+
+    if (!policy) {
+      throw new BadRequestException('Policy not found');
+    }
+
+    if (policy.clientId !== clientId) {
+      throw new BadRequestException('You can only view history of your own policies');
+    }
+
+    // Get all versions of this policy (by name and client)
+    return this.prisma.evaluationPolicy.findMany({
+      where: {
+        name: policy.name,
+        clientId: policy.clientId,
+      },
+      orderBy: { version: 'desc' },
+      include: {
+        lockedByUser: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+          },
+        },
       },
     });
   }

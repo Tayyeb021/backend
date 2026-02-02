@@ -17,6 +17,8 @@ import { NotificationsGateway } from '../notifications/notifications.gateway';
 import { SchedulingService } from './services/scheduling.service';
 import { AutomationService } from '../automation/automation.service';
 import { MatchingService } from '../sourcing/services/matching.service';
+import { EvaluationPoliciesService } from '../evaluation-policies/evaluation-policies.service';
+import { EvidenceService } from '../evidence/evidence.service';
 
 @Injectable()
 export class InterviewService {
@@ -31,6 +33,8 @@ export class InterviewService {
     private schedulingService: SchedulingService,
     private automationService: AutomationService,
     private matchingService: MatchingService,
+    private evaluationPoliciesService: EvaluationPoliciesService,
+    private evidenceService: EvidenceService,
   ) {}
 
   async createInterview(
@@ -231,6 +235,7 @@ export class InterviewService {
       interview.job.requiredSkills || [],
       candidateProfile,
       interview.job,
+      interview.jobId, // Pass jobId to fetch evaluation policy
     );
 
     // Generate instant feedback
@@ -272,6 +277,17 @@ export class InterviewService {
       href: `/dashboard/interviews/${interviewId}/review`,
     });
 
+    // Automatically attach evidence if policy requires it
+    try {
+      const evidencePolicy = await this.getEvaluationPolicyForJob(interview.jobId);
+      if (evidencePolicy?.requireEvidence) {
+        await this.attachEvidenceForScores(interviewId, scores, transcript, transcriptWithTimestamps);
+      }
+    } catch (error) {
+      console.error('Error attaching evidence automatically:', error);
+      // Don't throw - evidence attachment failure shouldn't break interview completion
+    }
+
     // Trigger automation for interview_completed
     this.automationService.executeAutomation('interview_completed', {
       interviewId: interviewId,
@@ -289,6 +305,64 @@ export class InterviewService {
     });
 
     return updatedInterview;
+  }
+
+  /**
+   * Automatically attach evidence for interview scores
+   */
+  private async attachEvidenceForScores(
+    interviewId: string,
+    scores: {
+      technical: number;
+      communication: number;
+      problemSolving: number;
+      culturalFit: number;
+      overall: number;
+    },
+    transcript: string,
+    transcriptWithTimestamps: any[],
+  ): Promise<void> {
+    // Generate evidence snippets from transcript for each score type
+    const scoreTypes = ['technical', 'communication', 'problemSolving', 'culturalFit', 'overall'];
+    
+    for (const scoreType of scoreTypes) {
+      const scoreValue = scores[scoreType as keyof typeof scores];
+      
+      // Find relevant transcript snippet (first 500 chars as placeholder)
+      // In production, this could use AI to find the most relevant snippet
+      const snippet = transcript.substring(0, Math.min(500, transcript.length));
+      
+      // Find timestamp range if available
+      let timestampStart: number | undefined;
+      let timestampEnd: number | undefined;
+      
+      if (transcriptWithTimestamps && transcriptWithTimestamps.length > 0) {
+        timestampStart = transcriptWithTimestamps[0]?.start || 0;
+        timestampEnd = transcriptWithTimestamps[Math.min(10, transcriptWithTimestamps.length - 1)]?.end || undefined;
+      }
+
+      // Use interview ID as scoreId (since we don't have separate score records)
+      // In a more sophisticated system, you'd create Score records first
+      const scoreId = `${interviewId}_${scoreType}`;
+
+      try {
+        await this.evidenceService.attachEvidence({
+          scoreId,
+          scoreType,
+          scoreValue,
+          evidenceType: 'transcript',
+          evidenceSource: 'interview',
+          evidenceId: interviewId,
+          transcriptSnippet: snippet,
+          timestampStart,
+          timestampEnd,
+          confidence: 0.85, // Default confidence, could be calculated based on AI analysis
+        });
+      } catch (error) {
+        console.error(`Failed to attach evidence for ${scoreType}:`, error);
+        // Continue with other score types even if one fails
+      }
+    }
   }
 
   async getInterview(interviewId: string): Promise<Prisma.InterviewGetPayload<{
@@ -501,8 +575,78 @@ export class InterviewService {
   }
 
   /**
+   * Get evaluation policy for a job with precedence: Job → Role Spec → Default
+   */
+  private async getEvaluationPolicyForJob(jobId: string): Promise<{
+    id: string;
+    version: number;
+    technicalWeight: number;
+    communicationWeight: number;
+    problemSolvingWeight: number;
+    culturalFitWeight: number;
+    requireEvidence?: boolean;
+  } | null> {
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+      include: {
+        evaluationPolicy: true,
+        roleSpec: {
+          include: {
+            evaluationPolicy: true,
+          },
+        },
+      },
+    });
+
+    if (!job) {
+      return null;
+    }
+
+    // Precedence: Job policy → Role Spec policy → Default policy
+    if (job.evaluationPolicy) {
+      return {
+        id: job.evaluationPolicy.id,
+        version: job.evaluationPolicy.version,
+        technicalWeight: job.evaluationPolicy.technicalWeight,
+        communicationWeight: job.evaluationPolicy.communicationWeight,
+        problemSolvingWeight: job.evaluationPolicy.problemSolvingWeight,
+        culturalFitWeight: job.evaluationPolicy.culturalFitWeight,
+        requireEvidence: job.evaluationPolicy.requireEvidence,
+      };
+    }
+
+    if (job.roleSpec?.evaluationPolicy) {
+      return {
+        id: job.roleSpec.evaluationPolicy.id,
+        version: job.roleSpec.evaluationPolicy.version,
+        technicalWeight: job.roleSpec.evaluationPolicy.technicalWeight,
+        communicationWeight: job.roleSpec.evaluationPolicy.communicationWeight,
+        problemSolvingWeight: job.roleSpec.evaluationPolicy.problemSolvingWeight,
+        culturalFitWeight: job.roleSpec.evaluationPolicy.culturalFitWeight,
+        requireEvidence: job.roleSpec.evaluationPolicy.requireEvidence,
+      };
+    }
+
+    // Get default policy for the client
+    const defaultPolicy = await this.evaluationPoliciesService.getDefaultPolicy(job.clientId);
+    if (defaultPolicy) {
+      return {
+        id: defaultPolicy.id,
+        version: defaultPolicy.version,
+        technicalWeight: defaultPolicy.technicalWeight,
+        communicationWeight: defaultPolicy.communicationWeight,
+        problemSolvingWeight: defaultPolicy.problemSolvingWeight,
+        culturalFitWeight: defaultPolicy.culturalFitWeight,
+        requireEvidence: defaultPolicy.requireEvidence,
+      };
+    }
+
+    return null;
+  }
+
+  /**
    * Calculate detailed multi-dimensional scores
-   * Now includes proper cultural fit scoring algorithm
+   * Now uses Evaluation Policy weights instead of hardcoded values
    */
   async calculateDetailedScores(
     transcript: string,
@@ -515,12 +659,15 @@ export class InterviewService {
       profileData?: any;
     },
     job?: any, // Job object for cultural fit calculation
+    jobId?: string, // Job ID to fetch evaluation policy
   ): Promise<{
     technical: number;
     communication: number;
     problemSolving: number;
     culturalFit: number;
     overall: number;
+    policyId?: string;
+    policyVersion?: number;
   }> {
     try {
       // Use evaluateResponse for complete interview evaluation
@@ -574,12 +721,39 @@ export class InterviewService {
         culturalFit = Math.min(100, technical);
       }
 
-      // Calculate weighted overall score
+      // Get evaluation policy for this job
+      let policy: {
+        id: string;
+        version: number;
+        technicalWeight: number;
+        communicationWeight: number;
+        problemSolvingWeight: number;
+        culturalFitWeight: number;
+        requireEvidence?: boolean;
+      } | null = null;
+      let policyId: string | undefined;
+      let policyVersion: number | undefined;
+
+      if (jobId) {
+        policy = await this.getEvaluationPolicyForJob(jobId);
+        if (policy) {
+          policyId = policy.id;
+          policyVersion = policy.version;
+        }
+      }
+
+      // Use policy weights if available, otherwise use default weights
+      const technicalWeight = policy?.technicalWeight ?? 40;
+      const communicationWeight = policy?.communicationWeight ?? 25;
+      const problemSolvingWeight = policy?.problemSolvingWeight ?? 20;
+      const culturalFitWeight = policy?.culturalFitWeight ?? 15;
+
+      // Calculate weighted overall score using policy weights
       const overall = Math.round(
-        technical * 0.4 +
-          communication * 0.25 +
-          problemSolving * 0.2 +
-          culturalFit * 0.15,
+        (technical * technicalWeight) / 100 +
+          (communication * communicationWeight) / 100 +
+          (problemSolving * problemSolvingWeight) / 100 +
+          (culturalFit * culturalFitWeight) / 100,
       );
 
       return {
@@ -588,6 +762,8 @@ export class InterviewService {
         problemSolving,
         culturalFit,
         overall,
+        policyId,
+        policyVersion,
       };
     } catch (error: any) {
       console.error('Failed to calculate detailed scores:', error);

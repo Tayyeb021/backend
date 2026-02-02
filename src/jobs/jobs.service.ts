@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Job, JobStatus, Prisma, CandidateStatus, InterviewLanguage, InterviewType, UserRole } from '@prisma/client';
+import { Job, JobStatus, Prisma, CandidateStatus, InterviewLanguage, InterviewType, UserRole, ExperienceLevel, EngagementType } from '@prisma/client';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { JobQueryDto } from './dto/job-query.dto';
@@ -71,6 +71,78 @@ export class JobsService {
     }
 
     return job;
+  }
+
+  /**
+   * Create a job from a locked Role Specification
+   * Auto-populates fields from role spec and links evaluation policy
+   */
+  async createJobFromRoleSpec(
+    roleSpecId: string,
+    clientId: string,
+    overrides?: Partial<CreateJobDto>,
+  ): Promise<Job> {
+    // Get role spec with evaluation policy
+    const roleSpec = await this.prisma.roleSpec.findUnique({
+      where: { id: roleSpecId },
+      include: {
+        evaluationPolicy: true,
+        client: true,
+      },
+    });
+
+    if (!roleSpec) {
+      throw new NotFoundException('Role specification not found');
+    }
+
+    // Verify role spec belongs to the client
+    if (roleSpec.clientId !== clientId) {
+      throw new ForbiddenException('You can only create jobs from your own role specifications');
+    }
+
+    // Only allow creating jobs from locked role specs
+    if (roleSpec.status !== 'locked') {
+      throw new BadRequestException(
+        'Can only create jobs from locked role specifications. Please lock the role spec first.',
+      );
+    }
+
+    // Auto-populate job data from role spec
+    const jobData: CreateJobDto = {
+      title: overrides?.title || roleSpec.title,
+      description: overrides?.description || roleSpec.jobDescription,
+      requiredSkills: overrides?.requiredSkills || [
+        ...roleSpec.mustHaveSkills,
+        ...(roleSpec.niceToHaveSkills || []),
+      ],
+      seniorityLevel: overrides?.seniorityLevel || roleSpec.seniorityLevel,
+      experienceLevel: (overrides?.experienceLevel || this.mapSeniorityToExperience(roleSpec.seniorityLevel)) as ExperienceLevel,
+      jobType: overrides?.jobType || roleSpec.employmentType,
+      engagementLength: (overrides?.engagementLength || EngagementType.long_term) as EngagementType, // Default to long_term
+      workMode: overrides?.workMode || roleSpec.workMode,
+      country: overrides?.country || roleSpec.location || undefined,
+      evaluationPolicyId: overrides?.evaluationPolicyId || roleSpec.evaluationPolicyId || undefined,
+      roleSpecId: roleSpecId, // Link to role spec
+      ...overrides, // Allow manual overrides (these will override the above)
+    };
+
+    // Create the job using existing createJob method
+    const job = await this.createJob(jobData, clientId);
+
+    return job;
+  }
+
+  /**
+   * Map seniority level to experience level
+   */
+  private mapSeniorityToExperience(seniorityLevel: string): ExperienceLevel {
+    const mapping: Record<string, ExperienceLevel> = {
+      junior: ExperienceLevel.one_to_three,
+      mid: ExperienceLevel.three_to_five,
+      senior: ExperienceLevel.five_plus,
+      expert: ExperienceLevel.five_plus,
+    };
+    return mapping[seniorityLevel] || ExperienceLevel.three_to_five;
   }
 
   async getJobsByClient(

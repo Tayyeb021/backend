@@ -44,4 +44,26 @@ export class SkillTaxonomyController {
   async getCategories() {
     return this.skillTaxonomyService.getCategories();
   }
+
+  @Post('parse-job-description')
+  async parseJobDescription(@Body() body: { jobDescription: string }) {
+    return this.skillTaxonomyService.parseJobDescription(body.jobDescription);
+  }
+
+  @Post('suggest-similar')
+  async suggestSimilarSkills(
+    @Body() body: { skillName: string; limit?: number },
+  ) {
+    return this.skillTaxonomyService.suggestSimilarSkills(body.skillName, body.limit);
+  }
+
+  @Post('auto-match')
+  async autoMatchSkills(@Body() body: { skills: string[] }) {
+    return this.skillTaxonomyService.autoMatchSkills(body.skills);
+  }
+
+  @Get('role-category/:category')
+  async getSkillsByRoleCategory(@Param('category') category: string) {
+    return this.skillTaxonomyService.getSkillsByRoleCategory(category);
+  }
 }

@@ -9,6 +9,7 @@ import {
   Query,
   UseGuards,
   Request,
+  BadRequestException,
 } from '@nestjs/common';
 import { RoleSpecsService } from './role-specs.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -21,6 +22,9 @@ export class RoleSpecsController {
 
   @Post()
   async createRoleSpec(@Request() req: any, @Body() dto: CreateRoleSpecDto) {
+    if (!req.user || !req.user.id) {
+      throw new BadRequestException('User not authenticated');
+    }
     return this.roleSpecsService.createRoleSpec({
       ...dto,
       clientId: req.user.id,
@@ -33,6 +37,9 @@ export class RoleSpecsController {
     @Query('status') status?: string,
     @Query('search') search?: string,
   ) {
+    if (!req.user || !req.user.id) {
+      throw new BadRequestException('User not authenticated');
+    }
     return this.roleSpecsService.getRoleSpecs(req.user.id, { status, search });
   }
 
