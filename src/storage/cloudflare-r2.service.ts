@@ -4,7 +4,9 @@ import {
   PutObjectCommand,
   DeleteObjectCommand,
   ListObjectsV2Command,
+  GetObjectCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 @Injectable()
 export class CloudflareR2Service {
@@ -149,5 +151,68 @@ export class CloudflareR2Service {
     } catch (error: any) {
       throw new Error(`Failed to upload resume to R2: ${error.message}`);
     }
+  }
+
+  /**
+   * Generate a presigned URL for direct browser upload
+   * @param interviewId Interview ID
+   * @param questionId Question ID (optional, for per-question uploads)
+   * @param mimeType MIME type of the file
+   * @param expiresIn Expiration time in seconds (default: 1 hour)
+   * @returns Presigned URL and key
+   */
+  async generatePresignedUploadUrl(
+    interviewId: string,
+    questionId?: string,
+    mimeType: string = 'video/webm',
+    expiresIn: number = 3600,
+  ): Promise<{ url: string; key: string }> {
+    const timestamp = Date.now();
+    const extension = mimeType.includes('webm') ? 'webm' : 
+                     mimeType.includes('mp4') ? 'mp4' : 'webm';
+    const key = questionId
+      ? `interviews/${interviewId}/answers/${questionId}/${timestamp}.${extension}`
+      : `interviews/${interviewId}/${timestamp}.${extension}`;
+
+    try {
+      const command = new PutObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+        ContentType: mimeType,
+      });
+
+      const url = await getSignedUrl(this.s3Client, command, { expiresIn });
+
+      return { url, key };
+    } catch (error: any) {
+      throw new Error(`Failed to generate presigned URL: ${error.message}`);
+    }
+  }
+
+  /**
+   * Generate a presigned URL for downloading a file
+   */
+  async generatePresignedDownloadUrl(
+    key: string,
+    expiresIn: number = 3600,
+  ): Promise<string> {
+    try {
+      const command = new GetObjectCommand({
+        Bucket: this.bucketName,
+        Key: key,
+      });
+
+      const url = await getSignedUrl(this.s3Client, command, { expiresIn });
+      return url;
+    } catch (error: any) {
+      throw new Error(`Failed to generate presigned download URL: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get the public URL for a file (if public access is enabled)
+   */
+  getPublicUrl(key: string): string {
+    return `https://${this.bucketName}.r2.cloudflarestorage.com/${key}`;
   }
 }

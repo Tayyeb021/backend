@@ -11,7 +11,7 @@ import { Server, Socket } from 'socket.io';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { GeminiRealtimeService } from '../services/gemini-realtime.service';
-import { DeepgramService } from '../services/deepgram.service';
+import { LiveInterviewDeepgramService } from '../services/live-interview-deepgram.service';
 import { InterviewService } from '../interview.service';
 import { LiveClient } from '@deepgram/sdk';
 import axios from 'axios';
@@ -45,7 +45,7 @@ export class InterviewGateway
   constructor(
     private jwtService: JwtService,
     private geminiRealtimeService: GeminiRealtimeService,
-    private deepgramService: DeepgramService,
+    private deepgramService: LiveInterviewDeepgramService,
     private interviewService: InterviewService,
   ) {}
 
@@ -159,7 +159,7 @@ export class InterviewGateway
           // Store candidate transcript
           const transcript = {
             text,
-            timestamp,
+            timestamp: timestamp || Date.now(),
             language: data.language,
           };
           
@@ -222,11 +222,15 @@ export class InterviewGateway
 
       // Emit first question if available
       if (templateQuestions.length > 0) {
+        const firstQuestion = templateQuestions[0];
         client.emit('current-question', {
-          question: templateQuestions[0],
+          question: firstQuestion,
           index: 0,
           total: templateQuestions.length,
         });
+        
+        // Speak the question using Gemini TTS
+        await this.speakQuestion(data.interviewId, firstQuestion.question, data.language);
       }
 
       client.emit('interview-started', { success: true });
@@ -286,6 +290,12 @@ export class InterviewGateway
         index: data.questionIndex,
         total: session.templateQuestions.length,
       });
+
+      // Speak the question using Gemini TTS
+      // Get language from interview data or default to 'en'
+      const interview = await this.interviewService.getInterview(data.interviewId);
+      const language = interview.language || 'en';
+      await this.speakQuestion(data.interviewId, question.question, language);
     } catch (error: any) {
       client.emit('error', { message: error.message });
     }
@@ -316,6 +326,12 @@ export class InterviewGateway
         index: data.questionIndex,
         total: session.templateQuestions.length,
       });
+
+      // Speak the question using Gemini TTS
+      // Get language from interview data or default to 'en'
+      const interview = await this.interviewService.getInterview(data.interviewId);
+      const language = interview.language || 'en';
+      await this.speakQuestion(data.interviewId, question.question, language);
     } catch (error: any) {
       client.emit('error', { message: error.message });
     }
@@ -359,6 +375,33 @@ export class InterviewGateway
       client.emit('response-quality', analysis);
     } catch (error: any) {
       client.emit('error', { message: error.message });
+    }
+  }
+
+  /**
+   * Speak a question using Gemini TTS
+   */
+  private async speakQuestion(
+    interviewId: string,
+    questionText: string,
+    language: string,
+  ): Promise<void> {
+    try {
+      const session = this.activeInterviews.get(interviewId);
+      if (!session?.geminiSession) {
+        console.warn('Cannot speak question: Gemini session not available');
+        return;
+      }
+
+      // Use the speakText method to generate speech for the question
+      await this.geminiRealtimeService.speakText(
+        session.geminiSession,
+        questionText,
+        language,
+      );
+    } catch (error: any) {
+      console.error('Error speaking question:', error);
+      // Don't throw - if TTS fails, the question text is still displayed
     }
   }
 
@@ -440,103 +483,5 @@ export class InterviewGateway
     }
   }
 
-  @SubscribeMessage('join-ai-to-room')
-  async handleJoinAIToRoom(
-    @MessageBody() data: { interviewId: string; dailyRoomId: string; language: string },
-    @ConnectedSocket() client: Socket,
-  ) {
-    try {
-      console.log('🤖 Received request to join AI to room:', {
-        interviewId: data.interviewId,
-        dailyRoomId: data.dailyRoomId,
-        language: data.language,
-      });
-
-      // Validate required data
-      if (!data.dailyRoomId) {
-        throw new Error('Daily room ID is required');
-      }
-
-      if (!data.interviewId) {
-        throw new Error('Interview ID is required');
-      }
-
-      // Get Daily.co API key from environment
-      const dailyApiKey = process.env.DAILY_API_KEY;
-      if (!dailyApiKey || dailyApiKey === 'your_daily_api_key_here' || dailyApiKey.trim().length === 0) {
-        console.error('❌ Daily.co API key not configured');
-        throw new Error('Daily.co API key not configured. Please set DAILY_API_KEY in your .env file');
-      }
-
-      // Create a meeting token for the AI participant
-      const dailyApiUrl = process.env.DAILY_API_URL || 'https://api.daily.co/v1';
-      const dailyDomain = process.env.DAILY_DOMAIN || 'staffenza';
-      
-      console.log('🔑 Creating AI meeting token for room:', data.dailyRoomId);
-      
-      const tokenResponse = await axios.post(
-        `${dailyApiUrl}/meeting-tokens`,
-        {
-          properties: {
-            room_name: data.dailyRoomId,
-            user_name: 'AI Interviewer',
-            is_owner: false,
-            exp: Math.floor(Date.now() / 1000) + (60 * 60), // 1 hour expiry
-          },
-        },
-        {
-          headers: {
-            'Authorization': `Bearer ${dailyApiKey}`,
-            'Content-Type': 'application/json',
-          },
-        }
-      );
-
-      if (!tokenResponse.data || !tokenResponse.data.token) {
-        throw new Error('Failed to create AI token: Invalid response from Daily.co API');
-      }
-
-      const aiToken = tokenResponse.data.token;
-      const roomUrl = `https://${dailyDomain}.daily.co/${data.dailyRoomId}`;
-
-      console.log('✅ AI token created successfully');
-      console.log('🌐 Room URL:', roomUrl);
-      console.log('🔑 Token (first 20 chars):', aiToken.substring(0, 20) + '...');
-
-      // Emit success with token and room URL
-      // The frontend will use this to create a hidden Daily.co frame for the AI
-      const responseData = {
-        message: 'AI token created. AI will join the room.',
-        token: aiToken,
-        roomUrl: roomUrl,
-        dailyRoomId: data.dailyRoomId,
-      };
-
-      client.emit('ai-joined-room', responseData);
-      console.log('✅ Sent ai-joined-room event to client');
-
-      // Also broadcast to all clients in the interview room (if using rooms)
-      client.to(`interview-${data.interviewId}`).emit('ai-joined-room', {
-        message: 'AI has joined the video room',
-        token: aiToken,
-        roomUrl: roomUrl,
-        dailyRoomId: data.dailyRoomId,
-      });
-
-      return { success: true, message: 'AI join request processed successfully' };
-
-    } catch (error: any) {
-      console.error('❌ Error joining AI to room:', error.message);
-      console.error('❌ Error details:', error.response?.data || error);
-      
-      const errorMessage = error.response?.data?.info || error.message || 'Failed to join AI to video room';
-      
-      client.emit('ai-room-join-error', {
-        message: errorMessage,
-        error: error.response?.data || error.message,
-      });
-
-      return { success: false, error: errorMessage };
-    }
-  }
+  // Daily.co methods removed - async interview flow doesn't use video rooms
 }

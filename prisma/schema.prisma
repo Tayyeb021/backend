@@ -164,7 +164,7 @@ model Interview {
   scheduledAt              DateTime?         @db.Timestamp(6)
   startedAt                DateTime?         @db.Timestamp(6)
   completedAt              DateTime?         @db.Timestamp(6)
-  dailyRoomId              String?           @db.VarChar
+  dailyRoomId              String?           @db.VarChar // Deprecated - kept for migration
   videoUrl                 String?           @db.VarChar
   transcript               String?
   transcriptWithTimestamps Json?
@@ -184,6 +184,7 @@ model Interview {
   candidate                Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_9b47fb5a4e06ccb14d20d2f06fd")
   client                   User              @relation("InterviewClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
   template                 InterviewTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  sessions                 InterviewSession[]
 
   @@index([candidateId], map: "IDX_INTERVIEWS_CANDIDATE_ID")
   @@index([clientId], map: "IDX_INTERVIEWS_CLIENT_ID")
@@ -220,9 +221,52 @@ model InterviewQuestion {
   createdAt   DateTime          @default(now()) @db.Timestamp(6)
   updatedAt   DateTime          @default(now()) @updatedAt @db.Timestamp(6)
   template    InterviewTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  answers     InterviewAnswer[]
 
   @@index([templateId], map: "IDX_QUESTIONS_TEMPLATE_ID")
   @@map("interview_questions")
+}
+
+model InterviewSession {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interviewId     String            @db.Uuid
+  currentQuestionIndex Int          @default(0)
+  status          String            @default("in_progress") // in_progress, completed, abandoned
+  startedAt       DateTime          @default(now()) @db.Timestamp(6)
+  completedAt     DateTime?         @db.Timestamp(6)
+  createdAt       DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime          @default(now()) @updatedAt @db.Timestamp(6)
+  interview       Interview          @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  answers         InterviewAnswer[]
+
+  @@index([interviewId], map: "IDX_SESSION_INTERVIEW_ID")
+  @@index([status], map: "IDX_SESSION_STATUS")
+  @@map("interview_sessions")
+}
+
+model InterviewAnswer {
+  id              String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  sessionId       String            @db.Uuid
+  questionId      String            @db.Uuid
+  questionText    String            // Snapshot of question at time of answer
+  questionType    QuestionType
+  videoUrl        String?           @db.VarChar // R2 URL for video
+  audioUrl        String?           @db.VarChar // R2 URL for extracted audio
+  transcript      String?           // Deepgram transcription
+  duration        Int?               // Duration in seconds
+  evaluation      Json?              // Gemini evaluation JSON
+  scores          Json?              // Detailed scores from evaluation
+  recordedAt      DateTime          @default(now()) @db.Timestamp(6)
+  processedAt     DateTime?         @db.Timestamp(6)
+  createdAt       DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime          @default(now()) @updatedAt @db.Timestamp(6)
+  session         InterviewSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  question        InterviewQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "IDX_ANSWER_SESSION_ID")
+  @@index([questionId], map: "IDX_ANSWER_QUESTION_ID")
+  @@index([recordedAt], map: "IDX_ANSWER_RECORDED_AT")
+  @@map("interview_answers")
 }
 
 enum QuestionType {

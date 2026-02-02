@@ -223,6 +223,72 @@ Remember: You are representing the company, so be professional, respectful, and 
   }
 
   /**
+   * Speak text directly using Gemini TTS (for reading questions)
+   */
+  async speakText(
+    session: GeminiRealtimeSession,
+    text: string,
+    language: string = 'en',
+  ): Promise<void> {
+    try {
+      // Use Gemini API to generate speech from text
+      // We ask Gemini to simply read the text naturally
+      const response = await axios.post(
+        `${this.apiUrl}?key=${this.apiKey}`,
+        {
+          contents: [
+            {
+              role: 'user',
+              parts: [
+                {
+                  text: `Please read this question naturally and clearly: "${text}"`,
+                },
+              ],
+            },
+          ],
+          generationConfig: {
+            responseModalities: ['AUDIO', 'TEXT'],
+            languageCode: language === 'ar' ? 'ar' : language === 'ur' ? 'ur' : 'en-US',
+          },
+          systemInstruction: {
+            parts: [
+              {
+                text: `You are an AI interviewer. When asked to read a question, simply read it naturally and clearly in a professional, friendly tone. Do not add any commentary or additional text - just read the question exactly as provided.`,
+              },
+            ],
+          },
+        },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          responseType: 'stream',
+        },
+      );
+
+      // Process streaming response
+      response.data.on('data', (chunk: Buffer) => {
+        const data = chunk.toString();
+        const lines = data.split('\n').filter((line: string) => line.trim());
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            try {
+              const json = JSON.parse(line.substring(6));
+              this.processGeminiResponse(json, session);
+            } catch (e) {
+              // Skip invalid JSON
+            }
+          }
+        }
+      });
+    } catch (error: any) {
+      console.error('Error speaking text with Gemini:', error);
+      throw new Error(`Failed to speak text: ${error.message}`);
+    }
+  }
+
+  /**
    * Send text input to Gemini and get AI response
    * Used when Deepgram provides transcription
    */

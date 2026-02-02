@@ -4,13 +4,16 @@ import { InterviewController } from './interview.controller';
 import { InterviewTemplateController } from './interview-template.controller';
 import { InterviewService } from './interview.service';
 import { InterviewTemplateService } from './interview-template.service';
-import { DailyService } from './services/daily.service';
 import { GeminiService } from './services/gemini.service';
 import { GeminiRealtimeService } from './services/gemini-realtime.service';
-import { DeepgramService } from './services/deepgram.service';
+import { VideoProcessingService } from './services/video-processing.service';
 import { InterviewOptimizerService } from './services/interview-optimizer.service';
 import { SchedulingService } from './services/scheduling.service';
+import { InterviewVideoRecordingService } from './services/interview-video-recording.service';
+import { LiveInterviewDeepgramService } from './services/live-interview-deepgram.service';
+import { LiveInterviewGeminiService } from './services/live-interview-gemini.service';
 import { InterviewGateway } from './gateways/interview.gateway';
+import { LiveInterviewGateway } from './gateways/live-interview.gateway';
 import { StorageModule } from '../storage/storage.module';
 import { EmailModule } from '../email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -33,14 +36,24 @@ import { SourcingModule } from '../sourcing/sourcing.module';
   providers: [
     InterviewService,
     InterviewTemplateService,
-    DailyService,
     GeminiService,
     GeminiRealtimeService,
-    DeepgramService,
+    VideoProcessingService,
     InterviewOptimizerService,
     SchedulingService,
+    InterviewVideoRecordingService,
+    LiveInterviewDeepgramService,
+    LiveInterviewGeminiService,
     InterviewGateway,
+    LiveInterviewGateway,
   ],
-  exports: [InterviewService, InterviewTemplateService, GeminiService, SchedulingService, InterviewOptimizerService],
+  exports: [
+    InterviewService, 
+    InterviewTemplateService, 
+    GeminiService, 
+    SchedulingService, 
+    InterviewOptimizerService,
+    LiveInterviewDeepgramService, // Export for use in TranscriptionModule
+  ],
 })
 export class InterviewModule {}
