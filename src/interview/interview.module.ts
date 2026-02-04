@@ -12,8 +12,10 @@ import { SchedulingService } from './services/scheduling.service';
 import { InterviewVideoRecordingService } from './services/interview-video-recording.service';
 import { LiveInterviewDeepgramService } from './services/live-interview-deepgram.service';
 import { LiveInterviewGeminiService } from './services/live-interview-gemini.service';
+import { NewInterviewDeepgramService } from './services/new-interview-deepgram.service';
 import { InterviewGateway } from './gateways/interview.gateway';
 import { LiveInterviewGateway } from './gateways/live-interview.gateway';
+import { NewInterviewGateway } from './gateways/new-interview.gateway';
 import { StorageModule } from '../storage/storage.module';
 import { EmailModule } from '../email/email.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -44,8 +46,10 @@ import { SourcingModule } from '../sourcing/sourcing.module';
     InterviewVideoRecordingService,
     LiveInterviewDeepgramService,
     LiveInterviewGeminiService,
+    NewInterviewDeepgramService,
     InterviewGateway,
     LiveInterviewGateway,
+    NewInterviewGateway,
   ],
   exports: [
     InterviewService, 

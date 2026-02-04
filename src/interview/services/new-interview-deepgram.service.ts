@@ -1,13 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { createClient, LiveClient } from '@deepgram/sdk';
-import { CloudflareR2Service } from '../../storage/cloudflare-r2.service';
+import { LiveClient } from '@deepgram/sdk';
 import WebSocket from 'ws';
 
 // Custom wrapper to implement LiveClient interface using direct WebSocket
 class DirectWebSocketConnection {
   private ws: WebSocket | null = null;
   private logger: Logger;
-  private onTranscript: (text: string, isFinal: boolean, timestamp?: number) => void;
+  private onTranscript: (text: string, isFinal: boolean) => void;
   private onError?: (error: Error) => void;
   private onOpen?: () => void;
   private eventHandlers: Map<string, Function[]> = new Map();
@@ -15,7 +14,7 @@ class DirectWebSocketConnection {
   constructor(
     ws: WebSocket,
     logger: Logger,
-    onTranscript: (text: string, isFinal: boolean, timestamp?: number) => void,
+    onTranscript: (text: string, isFinal: boolean) => void,
     onError?: (error: Error) => void,
     onOpen?: () => void,
   ) {
@@ -57,12 +56,11 @@ class DirectWebSocketConnection {
         if (message.channel?.alternatives?.[0]?.transcript) {
           const transcript = message.channel.alternatives[0].transcript;
           const isFinal = message.is_final || false;
-          const timestamp = Date.now();
 
           this.logger.log(`🎤 Deepgram transcript (${isFinal ? 'FINAL' : 'interim'}): "${transcript}"`);
 
           if (transcript && transcript.trim().length > 0) {
-            this.onTranscript(transcript, isFinal, timestamp);
+            this.onTranscript(transcript, isFinal);
           }
 
           // Emit results event
@@ -139,12 +137,11 @@ class DirectWebSocketConnection {
 }
 
 @Injectable()
-export class LiveInterviewDeepgramService {
-  private readonly logger = new Logger(LiveInterviewDeepgramService.name);
+export class NewInterviewDeepgramService {
+  private readonly logger = new Logger(NewInterviewDeepgramService.name);
   private deepgramApiKey: string;
-  private deepgram: ReturnType<typeof createClient> | null = null;
 
-  constructor(private r2Service: CloudflareR2Service) {
+  constructor() {
     this.deepgramApiKey = process.env.DEEPGRAM_API_KEY || '';
     if (!this.deepgramApiKey) {
       this.logger.warn('❌ Deepgram API key not configured');
@@ -153,21 +150,15 @@ export class LiveInterviewDeepgramService {
         ? `${this.deepgramApiKey.substring(0, 8)}...${this.deepgramApiKey.substring(this.deepgramApiKey.length - 4)}`
         : '***';
       this.logger.log(`✅ Deepgram API key loaded: ${partialKey} (length: ${this.deepgramApiKey.length})`);
-      // Initialize client for file transcription (still uses SDK)
-      this.deepgram = createClient(this.deepgramApiKey);
     }
   }
 
   /**
    * Create a new Deepgram live transcription connection using direct WebSocket
    * This matches the working implementation that uses direct WebSocket instead of SDK
-   * @param onTranscript Callback when transcript is received
-   * @param onError Callback for errors
-   * @param onOpen Callback when connection opens
-   * @returns Deepgram live client
    */
-  createLiveConnection(
-    onTranscript: (text: string, isFinal: boolean, timestamp?: number) => void,
+  createConnection(
+    onTranscript: (text: string, isFinal: boolean) => void,
     onError?: (error: Error) => void,
     onOpen?: () => void,
   ): LiveClient {
@@ -214,9 +205,6 @@ export class LiveInterviewDeepgramService {
 
   /**
    * Send audio data to Deepgram connection
-   * @param connection Deepgram live client
-   * @param audioBuffer Audio buffer to send
-   * @param isKeepalive Whether this is a keepalive packet (for logging purposes)
    */
   sendAudio(connection: LiveClient, audioBuffer: Buffer, isKeepalive: boolean = false): void {
     try {
@@ -251,7 +239,6 @@ export class LiveInterviewDeepgramService {
 
   /**
    * Close Deepgram connection
-   * @param connection Deepgram live client
    */
   closeConnection(connection: LiveClient): void {
     try {
@@ -262,61 +249,5 @@ export class LiveInterviewDeepgramService {
     } catch (error) {
       this.logger.error('Error closing Deepgram connection:', error);
     }
-  }
-
-  /**
-   * Transcribe audio file from R2 (async)
-   * @param audioKey R2 key of the audio file
-   * @param language Language code (e.g., 'en-US', 'ar', 'hi')
-   * @returns Transcript text
-   */
-  async transcribeAudioFile(
-    audioKey: string,
-    language: string = 'en-US',
-  ): Promise<string> {
-    if (!this.deepgram) {
-      throw new Error('Deepgram client not initialized');
-    }
-
-    try {
-      // Get presigned download URL for audio
-      const audioUrl = await this.r2Service.generatePresignedDownloadUrl(audioKey);
-
-      // Transcribe using Deepgram file transcription API
-      const { result, error } = await this.deepgram.listen.prerecorded.transcribeUrl(
-        { url: audioUrl },
-        {
-          model: 'nova-2',
-          language: this.mapLanguageCode(language),
-          smart_format: true,
-          punctuate: true,
-        },
-      );
-
-      if (error) {
-        throw new Error(`Deepgram transcription error: ${error.message}`);
-      }
-
-      // Extract transcript from result
-      const transcript = result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
-      return transcript;
-    } catch (error: any) {
-      this.logger.error('Error transcribing audio file:', error);
-      throw new Error(`Failed to transcribe audio: ${error.message}`);
-    }
-  }
-
-  /**
-   * Map language codes to Deepgram format
-   */
-  private mapLanguageCode(language: string): string {
-    const languageMap: Record<string, string> = {
-      en: 'en-US',
-      ar: 'ar',
-      hi: 'hi',
-      ur: 'ur',
-      bn: 'bn',
-    };
-    return languageMap[language] || 'en-US';
   }
 }

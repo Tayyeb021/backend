@@ -8,30 +8,25 @@ import {
   MessageBody,
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
-import { Logger } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { LiveInterviewDeepgramService } from '../interview/services/live-interview-deepgram.service';
-import { LiveClient } from '@deepgram/sdk';
 
-interface TranscriptionSession {
-  socket: Socket;
-  deepgramConnection: LiveClient | null;
-  userId: string;
-}
-
+@Injectable()
 @WebSocketGateway({
+  namespace: '/transcription',
+  transport: ['websocket'],
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     credentials: true,
   },
-  namespace: '/transcription',
 })
 export class TranscriptionGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server: Server;
 
   private readonly logger = new Logger(TranscriptionGateway.name);
-  private sessions = new Map<string, TranscriptionSession>();
+  private connectedClients = new Map<string, string>(); // socketId -> userId
 
   constructor(
     private jwtService: JwtService,
@@ -51,6 +46,7 @@ export class TranscriptionGateway implements OnGatewayConnection, OnGatewayDisco
 
       const payload = this.jwtService.verify(token);
       client.data.userId = payload.sub;
+      this.connectedClients.set(client.id, payload.sub);
       this.logger.log(`Transcription client connected: ${client.id}, User ID: ${payload.sub}`);
     } catch (error) {
       this.logger.error('Authentication failed:', error);
@@ -59,17 +55,15 @@ export class TranscriptionGateway implements OnGatewayConnection, OnGatewayDisco
   }
 
   async handleDisconnect(client: Socket) {
-    const session = this.sessions.get(client.id);
-    if (session?.deepgramConnection) {
-      this.logger.log(`Closing Deepgram connection for client: ${client.id}`);
-      this.deepgramService.closeConnection(session.deepgramConnection);
-    }
-    this.sessions.delete(client.id);
+    this.connectedClients.delete(client.id);
     this.logger.log(`Transcription client disconnected: ${client.id}`);
   }
 
-  @SubscribeMessage('start-transcription')
-  async handleStartTranscription(@ConnectedSocket() client: Socket) {
+  @SubscribeMessage('transcribe-audio')
+  async handleTranscribeAudio(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { audio: string; language?: string }, // audio as base64 string
+  ) {
     try {
       const userId = client.data.userId;
       if (!userId) {
@@ -77,73 +71,60 @@ export class TranscriptionGateway implements OnGatewayConnection, OnGatewayDisco
         return;
       }
 
-      this.logger.log(`Starting transcription for client: ${client.id}, User: ${userId}`);
+      this.logger.log(`Transcribing audio for client: ${client.id}, User: ${userId}`);
 
-      // Create Deepgram connection on backend
-      const deepgramConnection = this.deepgramService.createLiveConnection(
-        (text, isFinal, timestamp) => {
-          // Forward transcript to client
-          client.emit('transcript', { text, isFinal, timestamp });
-        },
-        (error) => {
-          this.logger.error(`Deepgram error for client ${client.id}:`, error);
-          client.emit('error', { message: error.message });
-        },
-        () => {
-          this.logger.log(`Deepgram connection opened for client: ${client.id}`);
-          client.emit('connected');
-        }
-      );
+      // Convert base64 to buffer
+      const audioBuffer = Buffer.from(data.audio, 'base64');
+      this.logger.log(`Received audio file: ${audioBuffer.length} bytes`);
 
-      this.sessions.set(client.id, {
-        socket: client,
-        deepgramConnection,
-        userId,
-      });
+      // Transcribe using Deepgram file transcription
+      // We'll use a temporary approach: upload to a temporary URL or use buffer directly
+      // For now, let's use Deepgram's buffer transcription if available
+      const transcript = await this.transcribeAudioBuffer(audioBuffer, data.language || 'en-US');
 
-      this.logger.log(`Transcription started for client: ${client.id}`);
+      this.logger.log(`Transcription complete: ${transcript.length} characters`);
+      client.emit('transcript-complete', { transcript });
     } catch (error: any) {
-      this.logger.error('Error starting transcription:', error);
-      client.emit('error', { message: error.message || 'Failed to start transcription' });
+      this.logger.error('Error transcribing audio:', error);
+      client.emit('error', { message: error.message || 'Failed to transcribe audio' });
     }
   }
 
-  @SubscribeMessage('audio-chunk')
-  async handleAudioChunk(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { audio: number[] },
-  ) {
-    try {
-      const session = this.sessions.get(client.id);
-      if (!session) {
-        client.emit('error', { message: 'No active transcription session' });
-        return;
-      }
-
-      if (session.deepgramConnection) {
-        // Convert number array back to Int16Array buffer
-        const int16Array = new Int16Array(data.audio);
-        const audioBuffer = Buffer.from(int16Array.buffer);
-        this.deepgramService.sendAudio(session.deepgramConnection, audioBuffer);
-      } else {
-        this.logger.warn(`No Deepgram connection for client: ${client.id}`);
-      }
-    } catch (error: any) {
-      this.logger.error('Error processing audio chunk:', error);
-      client.emit('error', { message: error.message || 'Failed to process audio' });
+  private async transcribeAudioBuffer(audioBuffer: Buffer, language: string): Promise<string> {
+    if (!this.deepgramService['deepgram']) {
+      throw new Error('Deepgram client not initialized');
     }
+
+    const deepgram = this.deepgramService['deepgram'];
+    
+    // Use Deepgram's prerecorded transcription with buffer
+    const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
+      audioBuffer,
+      {
+        model: 'nova-2',
+        language: this.mapLanguageCode(language),
+        smart_format: true,
+        punctuate: true,
+        mimetype: 'audio/webm', // Adjust based on your audio format
+      },
+    );
+
+    if (error) {
+      throw new Error(`Deepgram transcription error: ${error.message}`);
+    }
+
+    const transcript = result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+    return transcript;
   }
 
-  @SubscribeMessage('stop-transcription')
-  async handleStopTranscription(@ConnectedSocket() client: Socket) {
-    const session = this.sessions.get(client.id);
-    if (session?.deepgramConnection) {
-      this.logger.log(`Stopping transcription for client: ${client.id}`);
-      this.deepgramService.closeConnection(session.deepgramConnection);
-      this.sessions.delete(client.id);
-      client.emit('stopped');
-    } else {
-      this.logger.warn(`No active session to stop for client: ${client.id}`);
-    }
+  private mapLanguageCode(language: string): string {
+    const languageMap: Record<string, string> = {
+      en: 'en-US',
+      ar: 'ar',
+      hi: 'hi',
+      ur: 'ur',
+      bn: 'bn',
+    };
+    return languageMap[language] || 'en-US';
   }
 }

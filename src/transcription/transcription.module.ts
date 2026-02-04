@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { TranscriptionGateway } from './transcription.gateway';
+import { TranscriptionController } from './transcription.controller';
 import { InterviewModule } from '../interview/interview.module';
 
 @Module({
@@ -11,6 +12,8 @@ import { InterviewModule } from '../interview/interview.module';
       signOptions: { expiresIn: '7d' },
     }),
   ],
+  controllers: [TranscriptionController],
   providers: [TranscriptionGateway],
+  exports: [TranscriptionGateway],
 })
 export class TranscriptionModule {}
