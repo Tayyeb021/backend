@@ -37,6 +37,20 @@ interface InterviewSession {
   };
   isIntroductionComplete: boolean;
   isInterviewStarted: boolean;
+  startedAt: Date; // Timestamp when interview started
+  pendingTranscriptBuffer: string; // Accumulate final transcripts before sending to AI
+  transcriptDebounceTimer?: NodeJS.Timeout; // Timer for debouncing transcript processing
+  lastTranscriptTime: number; // Timestamp of last transcript received
+  lastFollowUpSentTime: number; // Timestamp when last follow-up was sent (to prevent spam)
+  followUpCount: number; // Count of follow-ups sent (to prevent infinite loop)
+  lastInterimTranscript: string; // Last interim transcript received
+  lastInterimTime: number; // Timestamp of last interim transcript
+  interimStableTimer?: NodeJS.Timeout; // Timer to process stable interim transcripts
+  askedQuestions: string[]; // Track asked questions to prevent duplicates
+  isClosingSent: boolean; // Flag to prevent multiple closing messages
+  isProcessingTranscript: boolean; // Lock to prevent concurrent transcript processing
+  lastProcessedTranscript: string; // Track last processed transcript to avoid duplicates
+  isGeneratingQuestion: boolean; // Lock to prevent concurrent question generation
 }
 
 @WebSocketGateway({
@@ -90,6 +104,18 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         // Mark session as disconnecting to prevent reconnection attempts
         session.isDisconnecting = true;
         session.isReconnecting = false; // Cancel any ongoing reconnection
+        
+        // Clear debounce timer if exists
+        if (session.transcriptDebounceTimer) {
+          clearTimeout(session.transcriptDebounceTimer);
+          session.transcriptDebounceTimer = undefined;
+        }
+        
+        // Clear interim stable timer if exists
+        if (session.interimStableTimer) {
+          clearTimeout(session.interimStableTimer);
+          session.interimStableTimer = undefined;
+        }
         
         if (session?.deepgramConnection) {
           this.logger.log(`[Session ${sessionId}] Closing Deepgram connection due to client disconnect`);
@@ -173,6 +199,18 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         },
         isIntroductionComplete: false,
         isInterviewStarted: false,
+        startedAt: new Date(), // Will be updated when interview actually starts
+        pendingTranscriptBuffer: '',
+        lastTranscriptTime: 0,
+        lastFollowUpSentTime: 0,
+        followUpCount: 0,
+        lastInterimTranscript: '',
+        lastInterimTime: 0,
+        askedQuestions: [], // Track asked questions to prevent duplicates
+        isClosingSent: false, // Flag to prevent multiple closing messages
+        isProcessingTranscript: false, // Lock to prevent concurrent transcript processing
+        lastProcessedTranscript: '', // Track last processed transcript to avoid duplicates
+        isGeneratingQuestion: false, // Lock to prevent concurrent question generation
       };
 
       this.sessions.set(sessionId, session);
@@ -208,6 +246,8 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       }
 
       session.isInterviewStarted = true;
+      session.startedAt = new Date(); // Track when interview actually starts
+      this.logger.log(`[Session ${sessionId}] Interview started at ${session.startedAt.toISOString()}`);
 
       // Initialize Deepgram connection
       this.logger.log(`[Session ${sessionId}] Creating Deepgram connection...`);
@@ -577,7 +617,7 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       this.logger.log(`[Session ${sessionId}] 📝 INTERIM TRANSCRIPT [${timestamp}]: "${text}"`);
     }
 
-    // Emit transcript to client (both interim and final)
+    // Emit transcript to client (both interim and final) - for display purposes
     client.emit('transcript', {
       text,
       isFinal,
@@ -585,10 +625,389 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       speaker: 'candidate',
     });
 
-    // Only process final transcripts for AI response
+    // Handle interim transcripts - if they remain stable for a while, treat as final
+    if (!isFinal && text.trim().length > 0) {
+      const currentTime = Date.now();
+      const textTrimmed = text.trim();
+      const isSameAsLast = textTrimmed === session.lastInterimTranscript.trim();
+      
+      if (isSameAsLast && session.lastInterimTime > 0) {
+        // Same interim transcript - check if it's been stable long enough
+        const timeSinceLastInterim = currentTime - session.lastInterimTime;
+        const INTERIM_STABLE_DELAY = 4000; // 4 seconds of stability
+        
+        if (timeSinceLastInterim >= INTERIM_STABLE_DELAY) {
+          // Interim transcript has been stable for 4 seconds, treat it as final
+          this.logger.log(`[Session ${sessionId}] 📝 Interim transcript stable for ${(timeSinceLastInterim / 1000).toFixed(1)}s, treating as final: "${textTrimmed}"`);
+          
+          // Clear interim timer
+          if (session.interimStableTimer) {
+            clearTimeout(session.interimStableTimer);
+            session.interimStableTimer = undefined;
+          }
+          
+          // Process as if it were a final transcript (reuse the final transcript logic below)
+          // We'll set a flag to process this as final
+          session.lastInterimTranscript = '';
+          session.lastInterimTime = 0;
+          
+          // Process this interim as final by calling the final transcript handler logic
+          // We'll accumulate and debounce it
+          if (session.transcriptDebounceTimer) {
+            clearTimeout(session.transcriptDebounceTimer);
+            session.transcriptDebounceTimer = undefined;
+          }
+
+          // Accumulate in buffer
+          if (session.pendingTranscriptBuffer) {
+            session.pendingTranscriptBuffer += ' ' + textTrimmed;
+          } else {
+            session.pendingTranscriptBuffer = textTrimmed;
+          }
+          
+          session.lastTranscriptTime = Date.now();
+          this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript buffer (from stable interim): "${session.pendingTranscriptBuffer}"`);
+
+          // Set debounce timer
+          const DEBOUNCE_DELAY = 3000;
+          session.transcriptDebounceTimer = setTimeout(async () => {
+            const currentSession = this.sessions.get(sessionId);
+            if (!currentSession || currentSession.isDisconnecting) {
+              return;
+            }
+
+            const timeSinceLastTranscript = Date.now() - currentSession.lastTranscriptTime;
+            if (timeSinceLastTranscript < DEBOUNCE_DELAY - 100) {
+              this.logger.log(`[Session ${sessionId}] ⏳ Transcript received too recently, extending debounce`);
+              return;
+            }
+
+            const completeTranscript = currentSession.pendingTranscriptBuffer.trim();
+            if (completeTranscript.length === 0) {
+              return;
+            }
+
+            const fillerPhrases = ['okay', 'ok', 'yes', 'no', 'uh', 'um', 'ah', 'sorry', 'thank you', 'thanks', 'hello', 'hi', 'hey'];
+            const isFiller = completeTranscript.length < 10 || 
+              fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
+            
+            if (isFiller) {
+              this.logger.log(`[Session ${sessionId}] ⏭️ Skipping short/filler transcript: "${completeTranscript}"`);
+              currentSession.pendingTranscriptBuffer = '';
+              currentSession.transcriptDebounceTimer = undefined;
+              return;
+            }
+
+            currentSession.pendingTranscriptBuffer = '';
+            currentSession.transcriptDebounceTimer = undefined;
+
+            this.logger.log(`[Session ${sessionId}] ✅ Processing complete transcript after debounce: "${completeTranscript}"`);
+            await this.processCompleteTranscript(sessionId, completeTranscript, client);
+          }, DEBOUNCE_DELAY);
+          
+          return; // Don't process as interim anymore
+        }
+      } else {
+        // New or different interim transcript - reset tracking
+        session.lastInterimTranscript = textTrimmed;
+        session.lastInterimTime = currentTime;
+        
+        // Clear existing stable timer
+        if (session.interimStableTimer) {
+          clearTimeout(session.interimStableTimer);
+        }
+        
+        // Set timer to check if this interim becomes stable
+        const stableText = textTrimmed; // Capture for closure
+        session.interimStableTimer = setTimeout(async () => {
+          const currentSession = this.sessions.get(sessionId);
+          if (!currentSession || currentSession.isDisconnecting) {
+            return;
+          }
+          
+          // Check if interim is still the same and enough time has passed
+          const timeSinceLastInterim = Date.now() - currentSession.lastInterimTime;
+          if (currentSession.lastInterimTranscript === stableText && timeSinceLastInterim >= 4000) {
+            this.logger.log(`[Session ${sessionId}] 📝 Interim transcript stable after timer, treating as final: "${stableText}"`);
+            
+            // Clear the timer
+            currentSession.interimStableTimer = undefined;
+            currentSession.lastInterimTranscript = '';
+            currentSession.lastInterimTime = 0;
+            
+            // Process as final transcript
+            if (currentSession.transcriptDebounceTimer) {
+              clearTimeout(currentSession.transcriptDebounceTimer);
+              currentSession.transcriptDebounceTimer = undefined;
+            }
+
+            // Accumulate in buffer
+            if (currentSession.pendingTranscriptBuffer) {
+              currentSession.pendingTranscriptBuffer += ' ' + stableText;
+            } else {
+              currentSession.pendingTranscriptBuffer = stableText;
+            }
+            
+            currentSession.lastTranscriptTime = Date.now();
+            this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript buffer (from stable interim timer): "${currentSession.pendingTranscriptBuffer}"`);
+
+            // Set debounce timer
+            const DEBOUNCE_DELAY = 3000;
+            currentSession.transcriptDebounceTimer = setTimeout(async () => {
+              const finalSession = this.sessions.get(sessionId);
+              if (!finalSession || finalSession.isDisconnecting) {
+                return;
+              }
+
+              const timeSinceLastTranscript = Date.now() - finalSession.lastTranscriptTime;
+              if (timeSinceLastTranscript < DEBOUNCE_DELAY - 100) {
+                this.logger.log(`[Session ${sessionId}] ⏳ Transcript received too recently, extending debounce`);
+                return;
+              }
+
+              const completeTranscript = finalSession.pendingTranscriptBuffer.trim();
+              if (completeTranscript.length === 0) {
+                return;
+              }
+
+              const fillerPhrases = ['okay', 'ok', 'yes', 'no', 'uh', 'um', 'ah', 'sorry', 'thank you', 'thanks', 'hello', 'hi', 'hey'];
+              const isFiller = completeTranscript.length < 10 || 
+                fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
+              
+              if (isFiller) {
+                this.logger.log(`[Session ${sessionId}] ⏭️ Skipping short/filler transcript: "${completeTranscript}"`);
+                finalSession.pendingTranscriptBuffer = '';
+                finalSession.transcriptDebounceTimer = undefined;
+                return;
+              }
+
+              finalSession.pendingTranscriptBuffer = '';
+              finalSession.transcriptDebounceTimer = undefined;
+
+              this.logger.log(`[Session ${sessionId}] ✅ Processing complete transcript after debounce: "${completeTranscript}"`);
+              await this.processCompleteTranscript(sessionId, completeTranscript, client);
+            }, DEBOUNCE_DELAY);
+          }
+        }, 4000);
+      }
+    } else if (isFinal) {
+      // Clear interim tracking when we get a final transcript
+      session.lastInterimTranscript = '';
+      session.lastInterimTime = 0;
+      if (session.interimStableTimer) {
+        clearTimeout(session.interimStableTimer);
+        session.interimStableTimer = undefined;
+      }
+    }
+
+    // Process final transcripts for AI response with debouncing
     if (isFinal && text.trim().length > 0) {
-      this.logger.log(`[Session ${sessionId}] ✅ Processing final transcript for AI response: "${text}"`);
-      this.logger.log(`[Session ${sessionId}] Introduction complete: ${session.isIntroductionComplete}, Question index: ${session.currentQuestionIndex}`);
+      // Clear any existing debounce timer
+      if (session.transcriptDebounceTimer) {
+        this.logger.log(`[Session ${sessionId}] 🧹 Clearing existing debounce timer before setting new one`);
+        clearTimeout(session.transcriptDebounceTimer);
+        session.transcriptDebounceTimer = undefined;
+      }
+
+      // Accumulate final transcripts (add space if buffer already has content)
+      if (session.pendingTranscriptBuffer) {
+        session.pendingTranscriptBuffer += ' ' + text.trim();
+      } else {
+        session.pendingTranscriptBuffer = text.trim();
+      }
+      
+      session.lastTranscriptTime = Date.now();
+      this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript buffer: "${session.pendingTranscriptBuffer}"`);
+
+      // Set debounce timer: wait 6 seconds after last final transcript before processing
+      // This allows user to finish their complete thought and ensures we capture all transcripts
+      const DEBOUNCE_DELAY = 6000; // 6 seconds - longer delay to accumulate complete response
+      
+      // Store the buffer content at the time the timer is set (to detect if it changed)
+      const bufferSnapshot = session.pendingTranscriptBuffer;
+      const bufferSnapshotTime = Date.now();
+      
+      session.transcriptDebounceTimer = setTimeout(async () => {
+        // Check if session still exists and hasn't been cleared
+        const currentSession = this.sessions.get(sessionId);
+        if (!currentSession || currentSession.isDisconnecting) {
+          return;
+        }
+
+        // Check if buffer was already cleared (another timer might have processed it)
+        if (!currentSession.pendingTranscriptBuffer || currentSession.pendingTranscriptBuffer.trim().length === 0) {
+          this.logger.log(`[Session ${sessionId}] ⏭️ Buffer already cleared, skipping duplicate timer`);
+          currentSession.transcriptDebounceTimer = undefined;
+          return;
+        }
+
+        // Check if buffer content changed (new transcripts came in after timer was set)
+        // If buffer changed significantly, this timer is for old content - skip it
+        const currentBuffer = currentSession.pendingTranscriptBuffer.trim();
+        const snapshotBuffer = bufferSnapshot.trim();
+        if (currentBuffer !== snapshotBuffer && currentBuffer.length > snapshotBuffer.length) {
+          // Buffer has new content, let a newer timer handle it
+          this.logger.log(`[Session ${sessionId}] ⏭️ Buffer updated since timer was set, skipping old timer`);
+          return;
+        }
+
+        // Check if enough time has passed since last transcript (prevent race conditions)
+        const timeSinceLastTranscript = Date.now() - currentSession.lastTranscriptTime;
+        if (timeSinceLastTranscript < DEBOUNCE_DELAY - 100) {
+          // Too soon, reset timer
+          this.logger.log(`[Session ${sessionId}] ⏳ Transcript received too recently, extending debounce`);
+          return;
+        }
+
+        const completeTranscript = currentSession.pendingTranscriptBuffer.trim();
+        if (completeTranscript.length === 0) {
+          return;
+        }
+
+        // Skip very short transcripts that are likely incomplete (less than 10 characters)
+        // Also skip common filler words/phrases
+        const fillerPhrases = ['okay', 'ok', 'yes', 'no', 'uh', 'um', 'ah', 'sorry', 'thank you', 'thanks'];
+        const isFiller = completeTranscript.length < 10 || 
+          fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
+        
+        if (isFiller) {
+          this.logger.log(`[Session ${sessionId}] ⏭️ Skipping short/filler transcript: "${completeTranscript}"`);
+          currentSession.pendingTranscriptBuffer = '';
+          currentSession.transcriptDebounceTimer = undefined;
+          return;
+        }
+
+        // Check if we're already processing a transcript (prevent concurrent processing)
+        if (currentSession.isProcessingTranscript) {
+          this.logger.warn(`[Session ${sessionId}] ⚠️ Already processing a transcript, skipping duplicate: "${completeTranscript}"`);
+          // Don't clear buffer - let it be processed later
+          return;
+        }
+        
+        // Check if this transcript was already processed (prevent duplicate processing)
+        // Use a more lenient comparison (normalize whitespace and case)
+        const normalizedTranscript = completeTranscript.trim().toLowerCase().replace(/\s+/g, ' ');
+        const normalizedLastProcessed = currentSession.lastProcessedTranscript.trim().toLowerCase().replace(/\s+/g, ' ');
+        
+        if (normalizedLastProcessed && normalizedTranscript === normalizedLastProcessed) {
+          this.logger.warn(`[Session ${sessionId}] ⚠️ Transcript already processed, skipping duplicate: "${completeTranscript}"`);
+          currentSession.pendingTranscriptBuffer = '';
+          currentSession.transcriptDebounceTimer = undefined;
+          return;
+        }
+        
+        // Check if this transcript is very similar to the last processed one (fuzzy match)
+        // This handles cases where Deepgram sends slightly different versions of the same transcript
+        if (normalizedLastProcessed && normalizedTranscript.length > 20) {
+          // Calculate similarity (simple Levenshtein-like check)
+          const similarity = this.calculateSimilarity(normalizedTranscript, normalizedLastProcessed);
+          if (similarity > 0.9) { // 90% similar
+            this.logger.warn(`[Session ${sessionId}] ⚠️ Transcript too similar to last processed (${(similarity * 100).toFixed(1)}%), skipping: "${completeTranscript}"`);
+            currentSession.pendingTranscriptBuffer = '';
+            currentSession.transcriptDebounceTimer = undefined;
+            return;
+          }
+        }
+
+        // Clear the buffer and timer BEFORE processing (to prevent re-processing)
+        currentSession.pendingTranscriptBuffer = '';
+        currentSession.transcriptDebounceTimer = undefined;
+        
+        this.logger.log(`[Session ${sessionId}] ✅ Processing complete transcript after debounce: "${completeTranscript}"`);
+        this.logger.log(`[Session ${sessionId}] Introduction complete: ${currentSession.isIntroductionComplete}, Question index: ${currentSession.currentQuestionIndex}`);
+        this.logger.log(`[Session ${sessionId}] 🔒 Processing lock status: ${currentSession.isProcessingTranscript}, Generating question: ${currentSession.isGeneratingQuestion}`);
+        
+        // Process the accumulated transcript
+        await this.processCompleteTranscript(sessionId, completeTranscript, client);
+        
+        this.logger.log(`[Session ${sessionId}] ✅ Finished processing transcript`);
+      }, DEBOUNCE_DELAY);
+    }
+  }
+
+  /**
+   * Calculate similarity between two strings (simple Levenshtein distance-based)
+   * Returns a value between 0 and 1, where 1 is identical
+   */
+  private calculateSimilarity(str1: string, str2: string): number {
+    if (str1 === str2) return 1;
+    if (str1.length === 0 || str2.length === 0) return 0;
+    
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) return 1;
+    
+    // Simple similarity: check how many words match
+    const words1 = str1.split(' ');
+    const words2 = str2.split(' ');
+    const totalWords = Math.max(words1.length, words2.length);
+    
+    if (totalWords === 0) return 1;
+    
+    // Count matching words (order-independent)
+    let matches = 0;
+    const words2Set = new Set(words2);
+    for (const word of words1) {
+      if (words2Set.has(word)) {
+        matches++;
+      }
+    }
+    
+    // Also check character-level similarity for short strings
+    let charMatches = 0;
+    const minLength = Math.min(str1.length, str2.length);
+    for (let i = 0; i < minLength; i++) {
+      if (str1[i] === str2[i]) {
+        charMatches++;
+      }
+    }
+    
+    // Combine word and character similarity
+    const wordSimilarity = matches / totalWords;
+    const charSimilarity = minLength > 0 ? charMatches / Math.max(str1.length, str2.length) : 0;
+    
+    return (wordSimilarity * 0.7 + charSimilarity * 0.3);
+  }
+
+  private async processCompleteTranscript(
+    sessionId: string,
+    text: string,
+    client: Socket,
+  ) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      this.logger.warn(`[Session ${sessionId}] Cannot process transcript - session not found`);
+      return;
+    }
+    
+    // Set processing lock to prevent concurrent processing
+    if (session.isProcessingTranscript) {
+      this.logger.warn(`[Session ${sessionId}] ⚠️ Already processing transcript, skipping: "${text}"`);
+      return;
+    }
+    
+    session.isProcessingTranscript = true;
+    // Set last processed transcript (normalized for comparison)
+    session.lastProcessedTranscript = text.trim().toLowerCase().replace(/\s+/g, ' ');
+    
+    try {
+      // Check if this transcript was already added to conversation history
+      // Use normalized comparison to catch duplicates with different whitespace
+      const normalizedText = text.trim().toLowerCase().replace(/\s+/g, ' ');
+      const alreadyAdded = session.conversationHistory.some(
+        msg => {
+          if (msg.role !== 'user') return false;
+          const normalizedMsg = msg.content.trim().toLowerCase().replace(/\s+/g, ' ');
+          return normalizedMsg === normalizedText || this.calculateSimilarity(normalizedMsg, normalizedText) > 0.9;
+        }
+      );
+      
+      if (alreadyAdded) {
+        this.logger.warn(`[Session ${sessionId}] ⚠️ Transcript already in conversation history, skipping: "${text}"`);
+        session.isProcessingTranscript = false;
+        return;
+      }
       
       // Add to conversation history
       session.conversationHistory.push({
@@ -597,14 +1016,15 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         timestamp: new Date(),
       });
 
-      // Check if introduction is complete
-      if (!session.isIntroductionComplete) {
-        // Check if user has given a proper introduction (more than just name)
-        // Look for keywords that indicate a proper introduction
-        const introKeywords = ['experience', 'worked', 'background', 'years', 'skills', 'developer', 'engineer', 'studied', 'degree', 'project'];
-        const hasIntroContent = text.length > 50 || introKeywords.some(keyword => text.toLowerCase().includes(keyword));
-        
-        if (hasIntroContent) {
+    // Check if introduction is complete
+    if (!session.isIntroductionComplete) {
+      // Check if user has given a proper introduction (more than just name)
+      // Look for keywords that indicate a proper introduction
+      const introKeywords = ['experience', 'worked', 'work', 'background', 'years', 'skills', 'developer', 'engineer', 'engineered', 'studied', 'degree', 'project', 'developed', 'development', 'node', 'js', 'javascript', 'typescript', 'python', 'java', 'react', 'angular', 'vue', 'backend', 'frontend', 'full stack', 'fullstack'];
+      const textLower = text.toLowerCase();
+      const hasIntroContent = text.length > 30 || introKeywords.some(keyword => textLower.includes(keyword));
+      
+      if (hasIntroContent) {
           this.logger.log(`[Session ${sessionId}] Introduction detected, asking follow-up question`);
           session.isIntroductionComplete = true;
           
@@ -654,74 +1074,246 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
             session.currentQuestionIndex++;
           }
         } else {
-          // Prompt for more details
-          const prompt = "Nice to meet you! Could you tell me a bit more about your background and experience?";
+          // Prevent spamming the same follow-up question
+          const timeSinceLastFollowUp = Date.now() - session.lastFollowUpSentTime;
+          const MIN_FOLLOWUP_INTERVAL = 10000; // 10 seconds between follow-ups
+          const MAX_FOLLOWUPS = 3; // Maximum 3 follow-ups before forcing intro complete
           
-          session.conversationHistory.push({
-            role: 'assistant',
-            content: prompt,
-            timestamp: new Date(),
-          });
-
-          const followUpTimestamp = new Date().toISOString();
-          this.logger.log(`[Session ${sessionId}] 🤖 AI FOLLOW-UP [${followUpTimestamp}]: "${prompt}"`);
-
-          client.emit('ai-message', {
-            message: prompt,
-            type: 'follow-up',
-          });
-        }
-      } else {
-        // Continue with interview questions
-        this.logger.log(`[Session ${sessionId}] Introduction complete, continuing with questions. Current index: ${session.currentQuestionIndex}`);
-        
-        // Check if we should end interview
-        const shouldEnd = this.geminiService.shouldEndInterview(
-          session.currentQuestionIndex,
-          session.interviewContext.questions.length,
-          session.conversationHistory.length,
-        );
-        
-        this.logger.log(`[Session ${sessionId}] Should end interview: ${shouldEnd}`);
-        
-        if (shouldEnd) {
-          // End interview
-          const closing = await this.geminiService.generateClosing();
-          
-          session.conversationHistory.push({
-            role: 'assistant',
-            content: closing,
-            timestamp: new Date(),
-          });
-
-          const closingTimestamp = new Date().toISOString();
-          this.logger.log(`[Session ${sessionId}] 🤖 AI CLOSING [${closingTimestamp}]: "${closing}"`);
-
-          client.emit('ai-message', {
-            message: closing,
-            type: 'closing',
-          });
-
-          client.emit('interview-ended', {
-            message: 'Interview completed',
-          });
-
-          // Cleanup
-          if (session.deepgramConnection) {
-            this.deepgramService.closeConnection(session.deepgramConnection);
-          }
-          this.sessions.delete(sessionId);
-        } else {
-          // Generate next response
-          try {
-            this.logger.log(`[Session ${sessionId}] Generating next question (index: ${session.currentQuestionIndex})`);
+          if (session.followUpCount >= MAX_FOLLOWUPS) {
+            // Force introduction complete after max follow-ups to prevent infinite loop
+            this.logger.log(`[Session ${sessionId}] Max follow-ups reached (${session.followUpCount}), marking introduction as complete`);
+            session.isIntroductionComplete = true;
+            // Continue with interview questions
+            await this.continueWithInterviewQuestions(sessionId, client);
+          } else if (timeSinceLastFollowUp >= MIN_FOLLOWUP_INTERVAL) {
+            // Prompt for more details (only if enough time has passed)
+            const prompt = "Nice to meet you! Could you tell me a bit more about your background and experience?";
             
-            const response = await this.geminiService.generateResponse(
+            session.conversationHistory.push({
+              role: 'assistant',
+              content: prompt,
+              timestamp: new Date(),
+            });
+
+            session.lastFollowUpSentTime = Date.now();
+            session.followUpCount++;
+
+            const followUpTimestamp = new Date().toISOString();
+            this.logger.log(`[Session ${sessionId}] 🤖 AI FOLLOW-UP [${followUpTimestamp}] (${session.followUpCount}/${MAX_FOLLOWUPS}): "${prompt}"`);
+
+            client.emit('ai-message', {
+              message: prompt,
+              type: 'follow-up',
+            });
+          } else {
+            this.logger.log(`[Session ${sessionId}] ⏭️ Skipping follow-up - too soon since last one (${(timeSinceLastFollowUp / 1000).toFixed(1)}s ago)`);
+          }
+        }
+    } else {
+      // Continue with interview questions
+      await this.continueWithInterviewQuestions(sessionId, client);
+    }
+    
+    // Release processing lock
+    session.isProcessingTranscript = false;
+    } catch (error: any) {
+      // Release processing lock on error
+      if (session) {
+        session.isProcessingTranscript = false;
+      }
+      this.logger.error(`[Session ${sessionId}] Error processing transcript:`, error);
+    }
+  }
+
+  private async continueWithInterviewQuestions(sessionId: string, client: Socket) {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      this.logger.warn(`[Session ${sessionId}] Cannot continue interview - session not found`);
+      return;
+    }
+    
+    // Prevent concurrent question generation
+    if (session.isGeneratingQuestion) {
+      this.logger.warn(`[Session ${sessionId}] ⚠️ Already generating question, skipping duplicate call`);
+      return;
+    }
+    
+    session.isGeneratingQuestion = true;
+    
+    try {
+
+    this.logger.log(`[Session ${sessionId}] Introduction complete, continuing with questions. Current index: ${session.currentQuestionIndex}`);
+    
+    // Check if we should end interview (includes minimum duration check)
+    const shouldEnd = this.geminiService.shouldEndInterview(
+      session.currentQuestionIndex,
+      session.interviewContext.questions.length,
+      session.conversationHistory.length,
+      session.startedAt,
+    );
+    
+    // Calculate elapsed time for logging
+    const elapsedTime = Date.now() - session.startedAt.getTime();
+    const elapsedMinutes = elapsedTime / (60 * 1000);
+    
+    this.logger.log(
+      `[Session ${sessionId}] Should end interview: ${shouldEnd} ` +
+      `(Duration: ${elapsedMinutes.toFixed(1)} minutes, ` +
+      `Questions: ${session.currentQuestionIndex}/${session.interviewContext.questions.length}, ` +
+      `Conversation: ${session.conversationHistory.length} messages)`
+    );
+    
+    if (shouldEnd) {
+      // Prevent multiple closing messages
+      if (session.isClosingSent) {
+        this.logger.log(`[Session ${sessionId}] Closing already sent, skipping...`);
+        session.isGeneratingQuestion = false;
+        return;
+      }
+      
+      session.isClosingSent = true;
+      
+      // End interview
+      const closing = await this.geminiService.generateClosing();
+      
+      session.conversationHistory.push({
+        role: 'assistant',
+        content: closing,
+        timestamp: new Date(),
+      });
+
+      const closingTimestamp = new Date().toISOString();
+      this.logger.log(`[Session ${sessionId}] 🤖 AI CLOSING [${closingTimestamp}]: "${closing}"`);
+
+      client.emit('ai-message', {
+        message: closing,
+        type: 'closing',
+      });
+
+      // Wait a moment before ending to ensure message is sent
+      setTimeout(() => {
+        client.emit('interview-ended', {
+          message: 'Interview completed',
+        });
+
+        // Cleanup
+        if (session.transcriptDebounceTimer) {
+          clearTimeout(session.transcriptDebounceTimer);
+        }
+        if (session.deepgramConnection) {
+          this.deepgramService.closeConnection(session.deepgramConnection);
+        }
+        this.sessions.delete(sessionId);
+      }, 1000);
+    } else {
+      // Generate next response
+      try {
+        // Check if template questions are exhausted
+        const templateQuestionsExhausted = session.currentQuestionIndex >= session.interviewContext.questions.length;
+        
+        if (templateQuestionsExhausted) {
+          this.logger.log(`[Session ${sessionId}] All template questions exhausted, generating follow-up question`);
+          
+          // Generate follow-up question based on job requirements and conversation
+          const response = await this.geminiService.generateFollowUpQuestion(
+            session.interviewContext,
+            session.conversationHistory,
+            session.askedQuestions,
+          );
+
+          // Check if this question was already asked (prevent duplicates)
+          const responseLower = response.toLowerCase().trim();
+          const isDuplicate = session.askedQuestions.some(
+            asked => asked.toLowerCase().trim() === responseLower
+          );
+          
+          if (isDuplicate) {
+            this.logger.warn(`[Session ${sessionId}] ⚠️ Duplicate follow-up question detected, generating alternative...`);
+            
+            // Generate alternative question with different approach
+            const alternativeResponse = await this.geminiService.generateFollowUpQuestion(
               session.interviewContext,
               session.conversationHistory,
-              session.currentQuestionIndex,
+              session.askedQuestions,
             );
+            
+            session.conversationHistory.push({
+              role: 'assistant',
+              content: alternativeResponse,
+              timestamp: new Date(),
+            });
 
+            const timestamp = new Date().toISOString();
+            this.logger.log(`[Session ${sessionId}] 🤖 AI FOLLOW-UP QUESTION (alternative) [${timestamp}]: "${alternativeResponse}"`);
+
+            client.emit('ai-message', {
+              message: alternativeResponse,
+              type: 'question',
+            });
+
+            session.askedQuestions.push(alternativeResponse);
+          } else {
+            const timestamp = new Date().toISOString();
+            this.logger.log(`[Session ${sessionId}] 🤖 AI FOLLOW-UP QUESTION [${timestamp}]: "${response}"`);
+
+            session.conversationHistory.push({
+              role: 'assistant',
+              content: response,
+              timestamp: new Date(),
+            });
+
+            client.emit('ai-message', {
+              message: response,
+              type: 'question',
+            });
+
+            session.askedQuestions.push(response);
+          }
+        } else {
+          // Still have template questions - use them
+          this.logger.log(`[Session ${sessionId}] Generating next question from template (index: ${session.currentQuestionIndex})`);
+          
+          const response = await this.geminiService.generateResponse(
+            session.interviewContext,
+            session.conversationHistory,
+            session.currentQuestionIndex,
+          );
+
+          // Check if this question was already asked (prevent duplicates)
+          const responseLower = response.toLowerCase().trim();
+          const isDuplicate = session.askedQuestions.some(
+            asked => asked.toLowerCase().trim() === responseLower
+          );
+          
+          if (isDuplicate) {
+            this.logger.warn(`[Session ${sessionId}] ⚠️ Duplicate question detected, generating follow-up instead...`);
+            
+            // Generate follow-up question instead of repeating
+            const alternativeResponse = await this.geminiService.generateFollowUpQuestion(
+              session.interviewContext,
+              session.conversationHistory,
+              session.askedQuestions,
+            );
+            
+            session.conversationHistory.push({
+              role: 'assistant',
+              content: alternativeResponse,
+              timestamp: new Date(),
+            });
+
+            const timestamp = new Date().toISOString();
+            this.logger.log(`[Session ${sessionId}] 🤖 AI QUESTION (follow-up instead) [${timestamp}]: "${alternativeResponse}"`);
+
+            client.emit('ai-message', {
+              message: alternativeResponse,
+              type: 'question',
+            });
+
+            session.askedQuestions.push(alternativeResponse);
+            
+            // Still increment to move past the duplicate template question
+            session.currentQuestionIndex++;
+          } else {
             const timestamp = new Date().toISOString();
             this.logger.log(`[Session ${sessionId}] 🤖 AI QUESTION [${timestamp}]: "${response}"`);
 
@@ -736,31 +1328,38 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
               type: 'question',
             });
 
+            session.askedQuestions.push(response);
             session.currentQuestionIndex++;
             this.logger.log(`[Session ${sessionId}] Question index incremented to: ${session.currentQuestionIndex}`);
-          } catch (error: any) {
-            this.logger.error(`[Session ${sessionId}] Error generating next question:`, error);
-            // Fallback: ask a generic question
-            const fallbackQuestion = session.interviewContext.questions[session.currentQuestionIndex]?.question || 
-              "Could you tell me more about that?";
-            
-            session.conversationHistory.push({
-              role: 'assistant',
-              content: fallbackQuestion,
-              timestamp: new Date(),
-            });
-
-            const fallbackTimestamp2 = new Date().toISOString();
-            this.logger.log(`[Session ${sessionId}] 🤖 AI FALLBACK QUESTION [${fallbackTimestamp2}]: "${fallbackQuestion}"`);
-
-            client.emit('ai-message', {
-              message: fallbackQuestion,
-              type: 'question',
-            });
-
-            session.currentQuestionIndex++;
           }
         }
+      } catch (error: any) {
+        this.logger.error(`[Session ${sessionId}] Error generating next question:`, error);
+        // Fallback: ask a generic question
+        const fallbackQuestion = session.interviewContext.questions[session.currentQuestionIndex]?.question || 
+          "Could you tell me more about that?";
+        
+        session.conversationHistory.push({
+          role: 'assistant',
+          content: fallbackQuestion,
+          timestamp: new Date(),
+        });
+
+        const fallbackTimestamp2 = new Date().toISOString();
+        this.logger.log(`[Session ${sessionId}] 🤖 AI FALLBACK QUESTION [${fallbackTimestamp2}]: "${fallbackQuestion}"`);
+
+        client.emit('ai-message', {
+          message: fallbackQuestion,
+          type: 'question',
+        });
+
+        session.currentQuestionIndex++;
+      }
+    }
+    } finally {
+      // Always release the lock, even if an error occurred
+      if (session) {
+        session.isGeneratingQuestion = false;
       }
     }
   }
@@ -778,6 +1377,12 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         // Mark as disconnecting to prevent reconnection attempts
         session.isDisconnecting = true;
         session.isReconnecting = false;
+        
+        // Clear debounce timer if exists
+        if (session.transcriptDebounceTimer) {
+          clearTimeout(session.transcriptDebounceTimer);
+          session.transcriptDebounceTimer = undefined;
+        }
         
         // Close Deepgram connection
         if (session.deepgramConnection) {
