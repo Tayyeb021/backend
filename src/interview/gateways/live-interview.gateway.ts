@@ -14,6 +14,7 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { LiveInterviewDeepgramService } from '../services/live-interview-deepgram.service';
 import { LiveInterviewGeminiService } from '../services/live-interview-gemini.service';
 import { LiveClient } from '@deepgram/sdk';
+import { InterviewStatus } from '@prisma/client';
 
 interface InterviewSession {
   interviewId: string;
@@ -51,6 +52,7 @@ interface InterviewSession {
   isProcessingTranscript: boolean; // Lock to prevent concurrent transcript processing
   lastProcessedTranscript: string; // Track last processed transcript to avoid duplicates
   isGeneratingQuestion: boolean; // Lock to prevent concurrent question generation
+  preGeneratedGreeting?: string; // Pre-generated greeting to reduce start delay
 }
 
 @WebSocketGateway({
@@ -218,6 +220,21 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
 
       this.logger.log(`User ${userId} joined interview ${interviewId}`);
 
+      // Pre-generate greeting in parallel to reduce start delay
+      // This way the greeting is ready when 'start-interview' is called
+      this.geminiService.initializeInterview(session.interviewContext)
+        .then((greeting) => {
+          const currentSession = this.sessions.get(sessionId);
+          if (currentSession && !currentSession.isInterviewStarted) {
+            currentSession.preGeneratedGreeting = greeting;
+            this.logger.log(`[Session ${sessionId}] ✅ Greeting pre-generated: "${greeting.substring(0, 50)}..."`);
+          }
+        })
+        .catch((error) => {
+          this.logger.error(`[Session ${sessionId}] Failed to pre-generate greeting:`, error);
+          // Don't fail the join - greeting will be generated on start-interview as fallback
+        });
+
       // Notify client that interview is ready to start
       // Client should emit 'start-interview' when camera stream is loaded
       client.emit('interview-ready', {
@@ -245,12 +262,9 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         return;
       }
 
-      session.isInterviewStarted = true;
-      session.startedAt = new Date(); // Track when interview actually starts
-      this.logger.log(`[Session ${sessionId}] Interview started at ${session.startedAt.toISOString()}`);
-
-      // Initialize Deepgram connection
-      this.logger.log(`[Session ${sessionId}] Creating Deepgram connection...`);
+      // CRITICAL: Create Deepgram connection FIRST before marking interview as started
+      // This ensures connection is available when audio chunks arrive
+      this.logger.log(`[Session ${sessionId}] Creating Deepgram connection BEFORE starting interview...`);
       session.deepgramConnectionOpen = false;
       session.audioChunkQueue = []; // Initialize queue
       session.isReconnecting = false;
@@ -275,8 +289,9 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
           client.emit('deepgram-ready', { message: 'Deepgram connection is ready' });
           
           // Flush queued audio chunks (send in real-time intervals to avoid burst)
-          if (session.audioChunkQueue.length > 0) {
-            this.logger.log(`[Session ${sessionId}] Flushing ${session.audioChunkQueue.length} queued audio chunks...`);
+          const queuedChunks = session.audioChunkQueue.length;
+          if (queuedChunks > 0) {
+            this.logger.log(`[Session ${sessionId}] Flushing ${queuedChunks} queued audio chunks...`);
             const queue = [...session.audioChunkQueue];
             session.audioChunkQueue = [];
             
@@ -292,6 +307,8 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
               }, index * 250); // 250ms intervals to maintain real-time flow
             });
             this.logger.log(`[Session ${sessionId}] ✅ Queued chunks scheduled for sending`);
+          } else {
+            this.logger.log(`[Session ${sessionId}] ✅ Deepgram ready - no queued chunks to flush`);
           }
         },
       );
@@ -347,6 +364,12 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
 
       session.deepgramConnection = deepgramConnection;
       this.logger.log(`[Session ${sessionId}] Deepgram connection created, waiting for open event...`);
+      
+      // NOW mark interview as started - connection exists (even if not open yet)
+      // Audio chunks will be queued until connection opens
+      session.isInterviewStarted = true;
+      session.startedAt = new Date(); // Track when interview actually starts
+      this.logger.log(`[Session ${sessionId}] Interview started at ${session.startedAt.toISOString()} (Deepgram connection created, waiting for open event)`);
 
       // Check if connection opens after a delay (some SDK versions open asynchronously)
       // Note: Deepgram connections typically take 1-3 seconds to establish, which is normal
@@ -410,8 +433,18 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         }
       }, 4000);
 
-      // Generate and send greeting
-      const greeting = await this.geminiService.initializeInterview(session.interviewContext);
+      // Use pre-generated greeting if available, otherwise generate it now
+      let greeting: string;
+      if (session.preGeneratedGreeting) {
+        greeting = session.preGeneratedGreeting;
+        this.logger.log(`[Session ${sessionId}] ✅ Using pre-generated greeting`);
+        // Clear the pre-generated greeting after use
+        session.preGeneratedGreeting = undefined;
+      } else {
+        // Fallback: generate greeting if pre-generation didn't complete
+        this.logger.log(`[Session ${sessionId}] ⚠️ Pre-generated greeting not available, generating now...`);
+        greeting = await this.geminiService.initializeInterview(session.interviewContext);
+      }
       
       session.conversationHistory.push({
         role: 'assistant',
@@ -422,6 +455,7 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       const greetingTimestamp = new Date().toISOString();
       this.logger.log(`[Session ${sessionId}] 🤖 AI GREETING [${greetingTimestamp}]: "${greeting}"`);
 
+      // Send greeting immediately (don't wait for Deepgram connection)
       client.emit('ai-message', {
         message: greeting,
         type: 'greeting',
@@ -431,6 +465,53 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
     } catch (error: any) {
       this.logger.error('Error starting interview:', error);
       client.emit('error', { message: error.message || 'Failed to start interview' });
+    }
+  }
+
+  @SubscribeMessage('user-finished-speaking')
+  async handleUserFinishedSpeaking(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string },
+  ) {
+    const sessionId = client.data.sessionId;
+    try {
+      const session = this.sessions.get(sessionId);
+      
+      if (!session) {
+        this.logger.warn(`[Session ${sessionId}] User finished speaking but session not found`);
+        return;
+      }
+      
+      // User manually muted - they've finished speaking
+      // Process any pending transcript immediately (don't wait for debounce)
+      if (session.pendingTranscriptBuffer && session.pendingTranscriptBuffer.trim().length > 0) {
+        const completeTranscript = session.pendingTranscriptBuffer.trim();
+        
+        // Clear any existing debounce timer since user explicitly finished speaking
+        if (session.transcriptDebounceTimer) {
+          clearTimeout(session.transcriptDebounceTimer);
+          session.transcriptDebounceTimer = undefined;
+        }
+        
+        // Clear the buffer before processing
+        session.pendingTranscriptBuffer = '';
+        
+        // Skip very short/filler transcripts
+        const fillerPhrases = ['okay', 'ok', 'yes', 'no', 'uh', 'um', 'ah', 'sorry', 'thank you', 'thanks'];
+        const isFiller = completeTranscript.length < 10 || 
+          fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
+        
+        if (!isFiller) {
+          this.logger.log(`[Session ${sessionId}] ✅ User finished speaking - processing transcript immediately: "${completeTranscript}"`);
+          await this.processCompleteTranscript(sessionId, completeTranscript, client);
+        } else {
+          this.logger.log(`[Session ${sessionId}] ⏭️ User finished speaking but transcript is filler - skipping: "${completeTranscript}"`);
+        }
+      } else {
+        this.logger.log(`[Session ${sessionId}] User finished speaking but no pending transcript to process`);
+      }
+    } catch (error: any) {
+      this.logger.error(`[Session ${sessionId || 'unknown'}] Error handling user finished speaking:`, error);
     }
   }
 
@@ -448,8 +529,29 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         return;
       }
 
+      // If Deepgram connection doesn't exist yet, queue the chunk
+      // This can happen if audio arrives before 'start-interview' completes
       if (!session.deepgramConnection) {
-        this.logger.warn(`[Session ${sessionId}] Audio chunk received but Deepgram connection not created. Interview started: ${session.isInterviewStarted}`);
+        // Initialize queue if it doesn't exist
+        if (!session.audioChunkQueue) {
+          session.audioChunkQueue = [];
+        }
+        
+        // Queue the chunk - it will be sent when connection is created
+        const audioBuffer = Buffer.from(data.audio);
+        session.audioChunkQueue.push(audioBuffer);
+        
+        // Log first few chunks to help debug
+        if (session.audioChunkQueue.length <= 5) {
+          this.logger.log(`[Session ${sessionId}] Audio chunk queued (Deepgram connection not created yet). Queue size: ${session.audioChunkQueue.length}. Interview started: ${session.isInterviewStarted}`);
+        }
+        
+        // Limit queue size to prevent memory issues
+        if (session.audioChunkQueue.length > 100) {
+          session.audioChunkQueue.shift(); // Remove oldest chunk
+          this.logger.warn(`[Session ${sessionId}] Audio queue limit reached, dropping oldest chunk`);
+        }
+        
         return;
       }
 
@@ -625,170 +727,18 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       speaker: 'candidate',
     });
 
-    // Handle interim transcripts - if they remain stable for a while, treat as final
+    // Handle interim transcripts - DO NOT process them as final automatically
+    // Only use them for display purposes. Wait for final transcripts or user mute signal.
     if (!isFinal && text.trim().length > 0) {
-      const currentTime = Date.now();
-      const textTrimmed = text.trim();
-      const isSameAsLast = textTrimmed === session.lastInterimTranscript.trim();
+      // Just track interim transcripts for display, but don't process them
+      // This prevents premature processing when user pauses while speaking
+      session.lastInterimTranscript = text.trim();
+      session.lastInterimTime = Date.now();
       
-      if (isSameAsLast && session.lastInterimTime > 0) {
-        // Same interim transcript - check if it's been stable long enough
-        const timeSinceLastInterim = currentTime - session.lastInterimTime;
-        const INTERIM_STABLE_DELAY = 4000; // 4 seconds of stability
-        
-        if (timeSinceLastInterim >= INTERIM_STABLE_DELAY) {
-          // Interim transcript has been stable for 4 seconds, treat it as final
-          this.logger.log(`[Session ${sessionId}] 📝 Interim transcript stable for ${(timeSinceLastInterim / 1000).toFixed(1)}s, treating as final: "${textTrimmed}"`);
-          
-          // Clear interim timer
-          if (session.interimStableTimer) {
-            clearTimeout(session.interimStableTimer);
-            session.interimStableTimer = undefined;
-          }
-          
-          // Process as if it were a final transcript (reuse the final transcript logic below)
-          // We'll set a flag to process this as final
-          session.lastInterimTranscript = '';
-          session.lastInterimTime = 0;
-          
-          // Process this interim as final by calling the final transcript handler logic
-          // We'll accumulate and debounce it
-          if (session.transcriptDebounceTimer) {
-            clearTimeout(session.transcriptDebounceTimer);
-            session.transcriptDebounceTimer = undefined;
-          }
-
-          // Accumulate in buffer
-          if (session.pendingTranscriptBuffer) {
-            session.pendingTranscriptBuffer += ' ' + textTrimmed;
-          } else {
-            session.pendingTranscriptBuffer = textTrimmed;
-          }
-          
-          session.lastTranscriptTime = Date.now();
-          this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript buffer (from stable interim): "${session.pendingTranscriptBuffer}"`);
-
-          // Set debounce timer
-          const DEBOUNCE_DELAY = 3000;
-          session.transcriptDebounceTimer = setTimeout(async () => {
-            const currentSession = this.sessions.get(sessionId);
-            if (!currentSession || currentSession.isDisconnecting) {
-              return;
-            }
-
-            const timeSinceLastTranscript = Date.now() - currentSession.lastTranscriptTime;
-            if (timeSinceLastTranscript < DEBOUNCE_DELAY - 100) {
-              this.logger.log(`[Session ${sessionId}] ⏳ Transcript received too recently, extending debounce`);
-              return;
-            }
-
-            const completeTranscript = currentSession.pendingTranscriptBuffer.trim();
-            if (completeTranscript.length === 0) {
-              return;
-            }
-
-            const fillerPhrases = ['okay', 'ok', 'yes', 'no', 'uh', 'um', 'ah', 'sorry', 'thank you', 'thanks', 'hello', 'hi', 'hey'];
-            const isFiller = completeTranscript.length < 10 || 
-              fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
-            
-            if (isFiller) {
-              this.logger.log(`[Session ${sessionId}] ⏭️ Skipping short/filler transcript: "${completeTranscript}"`);
-              currentSession.pendingTranscriptBuffer = '';
-              currentSession.transcriptDebounceTimer = undefined;
-              return;
-            }
-
-            currentSession.pendingTranscriptBuffer = '';
-            currentSession.transcriptDebounceTimer = undefined;
-
-            this.logger.log(`[Session ${sessionId}] ✅ Processing complete transcript after debounce: "${completeTranscript}"`);
-            await this.processCompleteTranscript(sessionId, completeTranscript, client);
-          }, DEBOUNCE_DELAY);
-          
-          return; // Don't process as interim anymore
-        }
-      } else {
-        // New or different interim transcript - reset tracking
-        session.lastInterimTranscript = textTrimmed;
-        session.lastInterimTime = currentTime;
-        
-        // Clear existing stable timer
-        if (session.interimStableTimer) {
-          clearTimeout(session.interimStableTimer);
-        }
-        
-        // Set timer to check if this interim becomes stable
-        const stableText = textTrimmed; // Capture for closure
-        session.interimStableTimer = setTimeout(async () => {
-          const currentSession = this.sessions.get(sessionId);
-          if (!currentSession || currentSession.isDisconnecting) {
-            return;
-          }
-          
-          // Check if interim is still the same and enough time has passed
-          const timeSinceLastInterim = Date.now() - currentSession.lastInterimTime;
-          if (currentSession.lastInterimTranscript === stableText && timeSinceLastInterim >= 4000) {
-            this.logger.log(`[Session ${sessionId}] 📝 Interim transcript stable after timer, treating as final: "${stableText}"`);
-            
-            // Clear the timer
-            currentSession.interimStableTimer = undefined;
-            currentSession.lastInterimTranscript = '';
-            currentSession.lastInterimTime = 0;
-            
-            // Process as final transcript
-            if (currentSession.transcriptDebounceTimer) {
-              clearTimeout(currentSession.transcriptDebounceTimer);
-              currentSession.transcriptDebounceTimer = undefined;
-            }
-
-            // Accumulate in buffer
-            if (currentSession.pendingTranscriptBuffer) {
-              currentSession.pendingTranscriptBuffer += ' ' + stableText;
-            } else {
-              currentSession.pendingTranscriptBuffer = stableText;
-            }
-            
-            currentSession.lastTranscriptTime = Date.now();
-            this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript buffer (from stable interim timer): "${currentSession.pendingTranscriptBuffer}"`);
-
-            // Set debounce timer
-            const DEBOUNCE_DELAY = 3000;
-            currentSession.transcriptDebounceTimer = setTimeout(async () => {
-              const finalSession = this.sessions.get(sessionId);
-              if (!finalSession || finalSession.isDisconnecting) {
-                return;
-              }
-
-              const timeSinceLastTranscript = Date.now() - finalSession.lastTranscriptTime;
-              if (timeSinceLastTranscript < DEBOUNCE_DELAY - 100) {
-                this.logger.log(`[Session ${sessionId}] ⏳ Transcript received too recently, extending debounce`);
-                return;
-              }
-
-              const completeTranscript = finalSession.pendingTranscriptBuffer.trim();
-              if (completeTranscript.length === 0) {
-                return;
-              }
-
-              const fillerPhrases = ['okay', 'ok', 'yes', 'no', 'uh', 'um', 'ah', 'sorry', 'thank you', 'thanks', 'hello', 'hi', 'hey'];
-              const isFiller = completeTranscript.length < 10 || 
-                fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
-              
-              if (isFiller) {
-                this.logger.log(`[Session ${sessionId}] ⏭️ Skipping short/filler transcript: "${completeTranscript}"`);
-                finalSession.pendingTranscriptBuffer = '';
-                finalSession.transcriptDebounceTimer = undefined;
-                return;
-              }
-
-              finalSession.pendingTranscriptBuffer = '';
-              finalSession.transcriptDebounceTimer = undefined;
-
-              this.logger.log(`[Session ${sessionId}] ✅ Processing complete transcript after debounce: "${completeTranscript}"`);
-              await this.processCompleteTranscript(sessionId, completeTranscript, client);
-            }, DEBOUNCE_DELAY);
-          }
-        }, 4000);
+      // Clear any interim stable timer - we don't want to auto-process interim transcripts
+      if (session.interimStableTimer) {
+        clearTimeout(session.interimStableTimer);
+        session.interimStableTimer = undefined;
       }
     } else if (isFinal) {
       // Clear interim tracking when we get a final transcript
@@ -819,9 +769,10 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       session.lastTranscriptTime = Date.now();
       this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript buffer: "${session.pendingTranscriptBuffer}"`);
 
-      // Set debounce timer: wait 6 seconds after last final transcript before processing
+      // Set debounce timer: wait 8 seconds after last final transcript before processing
       // This allows user to finish their complete thought and ensures we capture all transcripts
-      const DEBOUNCE_DELAY = 6000; // 6 seconds - longer delay to accumulate complete response
+      // Increased from 6 to 8 seconds to prevent premature processing when user is still speaking
+      const DEBOUNCE_DELAY = 8000; // 8 seconds - longer delay to accumulate complete response
       
       // Store the buffer content at the time the timer is set (to detect if it changed)
       const bufferSnapshot = session.pendingTranscriptBuffer;
@@ -1190,8 +1141,55 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         type: 'closing',
       });
 
-      // Wait a moment before ending to ensure message is sent
-      setTimeout(() => {
+      // Wait longer before ending to allow AI to finish speaking the closing message
+      // Estimate: closing message is typically 2-3 sentences, which takes ~5-8 seconds to speak
+      // We'll wait 10 seconds to be safe, allowing the frontend to wait for actual speech completion
+      setTimeout(async () => {
+        // Save conversation history to database before ending
+        if (session.conversationHistory && session.conversationHistory.length > 0) {
+          try {
+            // Get transcript from conversation history (user messages only)
+            const userMessages = session.conversationHistory
+              .filter(msg => msg.role === 'user')
+              .map(msg => msg.content);
+            const transcriptText = userMessages.join(' ');
+
+            // Get transcript with timestamps
+            const transcriptWithTimestamps = session.conversationHistory
+              .filter(msg => msg.role === 'user')
+              .map(msg => ({
+                text: msg.content,
+                timestamp: msg.timestamp.getTime(),
+              }));
+
+            // Format conversation history for database
+            const formattedConversationHistory = session.conversationHistory.map(msg => ({
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp.toISOString(),
+            }));
+
+            this.logger.log(`[Session ${sessionId}] Saving conversation history to database (${session.conversationHistory.length} messages)`);
+
+            // Complete the interview with conversation history
+            await this.prisma.interview.update({
+              where: { id: session.interviewId },
+              data: {
+                status: InterviewStatus.awaiting_review,
+                completedAt: new Date(),
+                transcript: transcriptText,
+                transcriptWithTimestamps: transcriptWithTimestamps as any,
+                conversationHistory: formattedConversationHistory as any,
+              },
+            });
+
+            this.logger.log(`[Session ${sessionId}] ✅ Conversation history saved to database`);
+          } catch (error: any) {
+            this.logger.error(`[Session ${sessionId}] ❌ Failed to save conversation history:`, error);
+            // Don't fail the interview end if saving conversation fails
+          }
+        }
+
         client.emit('interview-ended', {
           message: 'Interview completed',
         });
@@ -1204,7 +1202,7 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
           this.deepgramService.closeConnection(session.deepgramConnection);
         }
         this.sessions.delete(sessionId);
-      }, 1000);
+      }, 10000); // Increased from 1000ms to 10000ms (10 seconds) to allow AI to finish speaking
     } else {
       // Generate next response
       try {
@@ -1390,7 +1388,51 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         }
 
         // Save conversation history to database
-        // TODO: Save conversation history
+        if (session.conversationHistory && session.conversationHistory.length > 0) {
+          try {
+            // Get transcript from conversation history (user messages only)
+            const userMessages = session.conversationHistory
+              .filter(msg => msg.role === 'user')
+              .map(msg => msg.content);
+            const transcriptText = userMessages.join(' ');
+
+            // Get transcript with timestamps
+            const transcriptWithTimestamps = session.conversationHistory
+              .filter(msg => msg.role === 'user')
+              .map(msg => ({
+                text: msg.content,
+                timestamp: msg.timestamp.getTime(),
+              }));
+
+            // Format conversation history for database
+            const formattedConversationHistory = session.conversationHistory.map(msg => ({
+              role: msg.role,
+              content: msg.content,
+              timestamp: msg.timestamp.toISOString(),
+            }));
+
+            this.logger.log(`[Session ${sessionId}] Saving conversation history to database (${session.conversationHistory.length} messages)`);
+
+            // Complete the interview with conversation history
+            await this.prisma.interview.update({
+              where: { id: session.interviewId },
+              data: {
+                status: InterviewStatus.awaiting_review,
+                completedAt: new Date(),
+                transcript: transcriptText,
+                transcriptWithTimestamps: transcriptWithTimestamps as any,
+                conversationHistory: formattedConversationHistory as any,
+              },
+            });
+
+            this.logger.log(`[Session ${sessionId}] ✅ Conversation history saved to database`);
+          } catch (error: any) {
+            this.logger.error(`[Session ${sessionId}] ❌ Failed to save conversation history:`, error);
+            // Don't fail the interview end if saving conversation fails
+          }
+        } else {
+          this.logger.warn(`[Session ${sessionId}] No conversation history to save`);
+        }
 
         // Cleanup
         this.sessions.delete(sessionId);

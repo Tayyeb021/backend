@@ -80,12 +80,18 @@ export class InterviewController {
       transcript: string;
       transcriptWithTimestamps: any[];
       videoUrl?: string;
+      conversationHistory?: Array<{
+        role: 'user' | 'assistant';
+        content: string;
+        timestamp: Date | string;
+      }>;
     },
   ) {
     return this.interviewService.completeInterview(id, {
       transcript: body.transcript,
       transcriptWithTimestamps: body.transcriptWithTimestamps,
       videoUrl: body.videoUrl,
+      conversationHistory: body.conversationHistory,
     });
   }
 

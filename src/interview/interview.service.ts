@@ -131,6 +131,11 @@ export class InterviewService {
       transcript: string;
       transcriptWithTimestamps: any[];
       videoUrl?: string;
+      conversationHistory?: Array<{
+        role: 'user' | 'assistant';
+        content: string;
+        timestamp: Date | string;
+      }>;
     },
   ): Promise<Interview> {
     const { transcript, transcriptWithTimestamps, videoUrl } = body;
@@ -171,6 +176,15 @@ export class InterviewService {
       interview.language,
     );
 
+    // Format conversation history for database storage
+    const formattedConversationHistory = body.conversationHistory
+      ? body.conversationHistory.map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+          timestamp: typeof msg.timestamp === 'string' ? msg.timestamp : msg.timestamp.toISOString(),
+        }))
+      : null;
+
     const updatedInterview = await this.prisma.interview.update({
       where: { id: interviewId },
       data: {
@@ -178,6 +192,7 @@ export class InterviewService {
         completedAt: new Date(),
         transcript,
         transcriptWithTimestamps,
+        conversationHistory: formattedConversationHistory as any,
         videoUrl: videoUrl || interview.videoUrl,
         scores: {
           ...scores,

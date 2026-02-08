@@ -66,35 +66,33 @@ Your task is to conduct the interview as if you are a real, engaged human interv
    * Initialize interview context and generate greeting
    */
   async initializeInterview(context: InterviewContext): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    // Use generation config for faster responses
+    const model = this.genAI.getGenerativeModel({ 
+      model: 'gemini-2.5-flash',
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+      },
+    });
 
     // Format questions for prompt
     const questionsText = context.questions
       .map(q => `${q.order + 1}. ${q.question}`)
       .join('\n');
 
+    // Optimized shorter prompt for faster processing
+    const skills = context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'General technical skills';
+    
+    // Simplified prompt structure
     const prompt = `${this.systemPrompt}
 
-====================
-DYNAMIC INTERVIEW CONTEXT (Injected at Runtime)
-====================
-- Interview Title/Role: ${context.jobTitle}
-- Interview Focus Areas (Required Skills): ${context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'General technical skills'}
-- Interview Questions (from template):
-${questionsText}
+Context: ${context.jobTitle} | Skills: ${skills}
+Questions: ${questionsText.substring(0, 300)}...
 
-====================
-CURRENT TASK: INITIALIZE INTERVIEW
-====================
-INSTRUCTIONS:
-1. Greet the candidate warmly and professionally
-2. Ask them to introduce themselves and tell you about their background
-3. Wait for their introduction before proceeding
-4. Keep your greeting to 2-3 sentences maximum
-5. Do NOT mention the job title or skills in the greeting - just greet them warmly
-6. Use the interview context above to guide your questions later, but don't mention it in the greeting
+Task: Greet warmly (2-3 sentences). Ask for introduction. Don't mention job title or skills in greeting.
 
-Generate a warm, professional greeting that asks for their introduction:`;
+Greeting:`;
 
     try {
       const result = await model.generateContent(prompt);
@@ -115,13 +113,22 @@ Generate a warm, professional greeting that asks for their introduction:`;
     conversationHistory: ConversationMessage[],
     currentQuestionIndex: number,
   ): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    // Use generation config for faster responses
+    const model = this.genAI.getGenerativeModel({ 
+      model: 'gemini-2.5-flash',
+      generationConfig: {
+        temperature: 0.7, // Balanced creativity
+        topP: 0.9,
+        topK: 40,
+      },
+    });
 
-    // Format conversation history
+    // Reduce conversation history from 10 to 5 messages for faster processing
+    // Only include the most recent context needed
     const historyText = conversationHistory
-      .slice(-10) // Last 10 messages for context
+      .slice(-5) // Last 5 messages for context (reduced from 10)
       .map(msg => `${msg.role === 'user' ? 'Candidate' : 'Interviewer'}: ${msg.content}`)
-      .join('\n\n');
+      .join('\n');
 
     const availableQuestions = context.questions.slice(currentQuestionIndex);
     
@@ -136,54 +143,21 @@ Generate a warm, professional greeting that asks for their introduction:`;
       ? availableQuestions.map(q => `${q.order + 1}. ${q.question}`).join('\n')
       : 'All template questions have been asked.';
 
+    // Optimized shorter prompt for faster processing
+    const skills = context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'General technical skills';
+    const recentAsked = askedQuestions.length > 0 ? askedQuestions.slice(-2).join('; ') : 'none';
+    
+    // Simplified prompt structure - remove verbose formatting
     const prompt = `${this.systemPrompt}
 
-====================
-DYNAMIC INTERVIEW CONTEXT (Injected at Runtime)
-====================
-- Interview Title/Role: ${context.jobTitle}
-- Interview Focus Areas (Required Skills): ${context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'General technical skills'}
-- Available Questions (from template):
-${questionsText}
-
-====================
-CONVERSATION HISTORY
-====================
+Context: ${context.jobTitle} | Skills: ${skills}
+${availableQuestions.length > 0 ? `Next questions: ${questionsText.substring(0, 200)}` : 'All template questions asked - generate new technical questions'}
+Recent conversation:
 ${historyText}
 
-====================
-CURRENT STATE
-====================
-- You have asked ${currentQuestionIndex} questions so far
-- You have ${availableQuestions.length} questions remaining from the template
-- Current question index: ${currentQuestionIndex}
+Task: Ask ONE question (1-2 sentences, max 30 words). ${availableQuestions.length > 0 ? 'Use template questions in order.' : 'Generate new technical question based on job requirements and candidate answers.'} Don't repeat: ${recentAsked}
 
-====================
-CURRENT TASK: GENERATE NEXT RESPONSE
-====================
-${availableQuestions.length === 0 ? `
-⚠️ ALL TEMPLATE QUESTIONS EXHAUSTED ⚠️
-- You have asked all questions from the template
-- You MUST now generate NEW follow-up or technical questions based on:
-  * Job Title: ${context.jobTitle}
-  * Required Skills: ${context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'General technical skills'}
-  * Candidate's previous answers in the conversation
-- Ask technical questions related to the job requirements and skills
-- DO NOT repeat questions you've already asked
-- DO NOT end the interview yet - keep asking relevant questions
-` : ''}
-
-INSTRUCTIONS:
-1. If the candidate just introduced themselves, ask ONE follow-up question related to their introduction
-2. ${availableQuestions.length > 0 ? `Proceed with the questions from the template in order, focusing on areas related to: ${context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'the job requirements'}` : 'Generate NEW technical questions based on the job requirements and candidate\'s previous answers'}
-3. Ask only ONE question at a time
-4. Keep your response to 1-2 sentences maximum (30 words)
-5. Use natural, conversational language
-6. Do NOT explain or elaborate on what the candidate said
-7. Do NOT repeat questions you've already asked (recently asked: ${askedQuestions.length > 0 ? askedQuestions.slice(-2).join('; ') : 'none'})
-8. ${availableQuestions.length === 0 ? 'Generate questions about: ' + (context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'technical skills relevant to ' + context.jobTitle) : 'Use the interview context (job title, focus areas, and questions) to guide your questions naturally'}
-
-Generate your next response:`;
+Question:`;
 
     try {
       const result = await model.generateContent(prompt);
@@ -310,51 +284,38 @@ Generate your next response:`;
     conversationHistory: ConversationMessage[],
     askedQuestions: string[],
   ): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    // Use generation config for faster responses
+    const model = this.genAI.getGenerativeModel({ 
+      model: 'gemini-2.5-flash',
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+      },
+    });
 
-    // Format conversation history
+    // Reduce conversation history from 10 to 5 messages for faster processing
     const historyText = conversationHistory
-      .slice(-10) // Last 10 messages for context
+      .slice(-5) // Last 5 messages for context (reduced from 10)
       .map(msg => `${msg.role === 'user' ? 'Candidate' : 'Interviewer'}: ${msg.content}`)
-      .join('\n\n');
+      .join('\n');
 
     // Get recently asked questions to avoid duplicates
     const recentQuestions = askedQuestions.slice(-5).join('; ');
 
+    // Optimized shorter prompt for faster processing
+    const skills = context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : context.jobTitle;
+    
+    // Simplified prompt structure
     const prompt = `${this.systemPrompt}
 
-====================
-DYNAMIC INTERVIEW CONTEXT (Injected at Runtime)
-====================
-- Interview Title/Role: ${context.jobTitle}
-- Interview Focus Areas (Required Skills): ${context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : 'General technical skills'}
-
-====================
-CONVERSATION HISTORY
-====================
+Context: ${context.jobTitle} | Skills: ${skills}
+Recent conversation:
 ${historyText}
 
-====================
-CURRENT STATE
-====================
-- All template questions have been asked
-- You need to generate NEW technical questions based on the job requirements
-- Recently asked questions (DO NOT repeat these): ${recentQuestions || 'none'}
+Task: Generate NEW technical question (1-2 sentences, max 30 words) about ${skills}. Base on candidate's answers. Don't repeat: ${recentQuestions || 'none'}
 
-====================
-CURRENT TASK: GENERATE FOLLOW-UP QUESTION
-====================
-INSTRUCTIONS:
-1. Generate a NEW technical question related to: ${context.requiredSkills.length > 0 ? context.requiredSkills.join(', ') : context.jobTitle}
-2. Base the question on the candidate's previous answers and the job requirements
-3. Ask about specific technologies, methodologies, or experiences relevant to the role
-4. Keep your response to 1-2 sentences maximum (30 words)
-5. Use natural, conversational language
-6. Do NOT repeat questions you've already asked
-7. Do NOT end the interview - keep asking relevant questions
-8. Focus on areas that haven't been covered yet or need deeper exploration
-
-Generate your next technical question:`;
+Question:`;
 
     try {
       const result = await model.generateContent(prompt);
@@ -375,11 +336,29 @@ Generate your next technical question:`;
    * Generate closing message
    */
   async generateClosing(): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    // Use generation config for faster responses
+    const model = this.genAI.getGenerativeModel({ 
+      model: 'gemini-2.5-flash',
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.9,
+        topK: 40,
+      },
+    });
 
+    // More specific prompt to generate a proper closing message
     const prompt = `${this.systemPrompt}
 
-The interview is now complete. Generate a warm, professional closing message (2-3 sentences) thanking the candidate for their time. Do not provide feedback or results.`;
+The interview is now complete. Generate a professional closing message that:
+1. Acknowledges the interview has ended (e.g., "That brings us to the end of the interview")
+2. Thanks the candidate for their time and sharing their experience
+3. Mentions that next steps will be communicated by the team if applicable
+4. Ends with appreciation and well wishes
+5. Keep it to 3-4 sentences maximum
+6. Do NOT provide feedback, results, or evaluation
+7. Do NOT mention specific details from the interview
+
+Generate a warm, professional closing message:`;
 
     try {
       const result = await model.generateContent(prompt);
@@ -388,7 +367,8 @@ The interview is now complete. Generate a warm, professional closing message (2-
       return text.trim();
     } catch (error: any) {
       this.logger.error('Error generating closing:', error);
-      return 'Thank you for your time today. We appreciate you taking the time to speak with us.';
+      // Fallback to a proper closing message
+      return 'That brings us to the end of the interview. Thank you for taking the time to share your experience with us. If there are next steps, someone from the team will be in touch. We appreciate your interest and wish you the best.';
     }
   }
 }
