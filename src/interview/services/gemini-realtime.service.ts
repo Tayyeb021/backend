@@ -4,6 +4,7 @@ import axios from 'axios';
 interface GeminiRealtimeSession {
   sessionId: string;
   ws: WebSocket;
+  candidateName?: string;
   onTranscript: (transcript: {
     text: string;
     timestamp: number;
@@ -15,11 +16,14 @@ interface GeminiRealtimeSession {
 @Injectable()
 export class GeminiRealtimeService {
   private readonly apiKey: string;
-  private readonly apiUrl: string =
-    'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:streamGenerateContent';
+  private readonly model: string;
+  private get apiUrl(): string {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:streamGenerateContent`;
+  }
 
   constructor() {
     this.apiKey = process.env.GEMINI_API_KEY || '';
+    this.model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   }
 
   async createSession(
@@ -49,7 +53,8 @@ export class GeminiRealtimeService {
     // This is a simplified implementation - actual Gemini Realtime API may differ
     const session: GeminiRealtimeSession = {
       sessionId,
-      ws: null as any, // Will be replaced with actual WebSocket connection
+      ws: null as any,
+      candidateName: context?.candidateName,
       onTranscript: onTranscript || (() => {}),
       onAudioResponse: onAudioResponse || (() => {}),
     };
@@ -83,6 +88,8 @@ ${context?.requiredSkills && context.requiredSkills.length > 0 ? `**Required Ski
 ${context?.candidateName ? `**Candidate:** ${context.candidateName}` : ''}
 ${context?.candidateSkills && context.candidateSkills.length > 0 ? `**Candidate Skills:** ${context.candidateSkills.join(', ')}` : ''}
 ${context?.candidateResume ? `**Candidate Background:** ${context.candidateResume}` : ''}
+
+**Naming:** When greeting or addressing the candidate, always use their actual name (${context?.candidateName ?? 'the candidate'}). Never use placeholders like [Candidate Name] or [Interviewer Name]. You are the AI interviewer; do not introduce yourself with a fake name.
 
 **Interview Strategy:**
 - Start with warm-up questions to make the candidate comfortable
@@ -200,19 +207,19 @@ Remember: You are representing the company, so be professional, respectful, and 
   ): void {
     if (response.candidates && response.candidates.length > 0) {
       const candidate = response.candidates[0];
+      if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') return;
 
-      // Extract text transcript
+      // Extract text transcript (streaming sends partial text in parts)
       if (candidate.content?.parts) {
         for (const part of candidate.content.parts) {
           if (part.text) {
+            console.log('[Gemini] Emitting AI text:', part.text.slice(0, 80) + (part.text.length > 80 ? '...' : ''));
             session.onTranscript({
               text: part.text,
               timestamp: Date.now(),
-              language: 'en', // Detect from response
+              language: 'en',
             });
           }
-
-          // Extract audio response
           if (part.inlineData?.data) {
             const audioBuffer = Buffer.from(part.inlineData.data, 'base64');
             session.onAudioResponse(audioBuffer.buffer);
@@ -222,9 +229,42 @@ Remember: You are representing the company, so be professional, respectful, and 
     }
   }
 
+  private get generateUrl(): string {
+    return `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:generateContent`;
+  }
+
   /**
-   * Send text input to Gemini and get AI response
-   * Used when Deepgram provides transcription
+   * Send text to Gemini and return the full response text (no stream).
+   * Used by AI router when Gemini is primary or fallback.
+   */
+  async sendTextAndGetFullResponse(
+    session: GeminiRealtimeSession,
+    text: string,
+  ): Promise<string> {
+    const response = await axios.post<{
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+      }>;
+    }>(
+      `${this.generateUrl}?key=${this.apiKey}`,
+      {
+        contents: [{ role: 'user', parts: [{ text }] }],
+        generationConfig: { maxOutputTokens: 1024, temperature: 0.7 },
+        systemInstruction: {
+          parts: [{
+            text: `You are an AI interviewer. Be concise. ${session.candidateName ? `Candidate name: ${session.candidateName}.` : ''} Respond with the interviewer's reply only.`,
+          }],
+        },
+      },
+      { headers: { 'Content-Type': 'application/json' } },
+    );
+    const part = response.data?.candidates?.[0]?.content?.parts?.[0];
+    return part?.text?.trim() ?? '';
+  }
+
+  /**
+   * Send text input to Gemini and stream AI response (transcript + audio)
+   * Used when OpenAI provides text and we use Gemini for TTS, or for real-time flow
    */
   async sendText(
     session: GeminiRealtimeSession,
@@ -246,14 +286,15 @@ Remember: You are representing the company, so be professional, respectful, and 
             },
           ],
           generationConfig: {
-            responseModalities: ['AUDIO', 'TEXT'],
-            languageCode: 'en-US',
+            maxOutputTokens: 1024,
+            temperature: 0.7,
           },
           systemInstruction: {
             parts: [
               {
                 text: `You are an AI interviewer conducting a professional technical interview. 
                 Your role is to assess the candidate's technical skills, problem-solving abilities, communication, and cultural fit.
+                ${session.candidateName ? `The candidate's name is ${session.candidateName}. Always use it when greeting or addressing them. Never use placeholders like [Candidate Name] or [Interviewer Name].` : 'Never use placeholders like [Candidate Name] or [Interviewer Name].'}
                 
                 Guidelines:
                 - Speak naturally in English
@@ -284,21 +325,93 @@ Remember: You are representing the company, so be professional, respectful, and 
         },
       );
 
-      // Process streaming response
-      response.data.on('data', (chunk: Buffer) => {
-        const data = chunk.toString();
-        const lines = data.split('\n').filter((line: string) => line.trim());
+      // Process streaming response: Gemini may send SSE (data: {...}) or raw JSON lines; JSON can span lines
+      let buffer = '';
+      let chunkCount = 0;
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            try {
-              const json = JSON.parse(line.substring(6));
-              this.processGeminiResponse(json, session);
-            } catch (e) {
-              // Skip invalid JSON
-            }
+      const tryParsePayload = (raw: string): any => {
+        const trimmed = raw.trim();
+        if (!trimmed) return null;
+        let jsonStr = trimmed;
+        if (trimmed.startsWith('data: ')) {
+          jsonStr = trimmed.slice(6).trim();
+          if (jsonStr === '' || jsonStr === '[DONE]') return null;
+        } else if (!trimmed.startsWith('{')) return null;
+        try {
+          return JSON.parse(jsonStr);
+        } catch {
+          return null;
+        }
+      };
+
+      const findBalancedJson = (s: string, start: number): number => {
+        if (s[start] !== '{') return -1;
+        let depth = 0;
+        for (let i = start; i < s.length; i++) {
+          if (s[i] === '{') depth++;
+          else if (s[i] === '}') {
+            depth--;
+            if (depth === 0) return i + 1;
           }
         }
+        return -1;
+      };
+
+      const extractAndProcess = (s: string): string => {
+        let rest = s.trimStart();
+        while (rest.length) {
+          const dataIdx = rest.indexOf('data:');
+          const braceIdx = rest.indexOf('{');
+          let payloadStr: string | null = null;
+          let skip = 0;
+          if (dataIdx !== -1 && (braceIdx === -1 || dataIdx <= braceIdx)) {
+            const afterData = rest.slice(dataIdx + 5).trimStart();
+            if (afterData.startsWith('{')) {
+              const openIdx = rest.indexOf('{', dataIdx);
+              const end = findBalancedJson(rest, openIdx);
+              if (end !== -1) {
+                payloadStr = rest.slice(openIdx, end).trim();
+                skip = end - dataIdx;
+              }
+            } else if (afterData === '' || afterData.startsWith('[DONE]')) {
+              skip = rest.indexOf('\n', dataIdx) + 1 || rest.length;
+            }
+          }
+          if (!payloadStr && braceIdx !== -1 && (dataIdx === -1 || braceIdx < dataIdx)) {
+            const end = findBalancedJson(rest, braceIdx);
+            if (end !== -1) {
+              payloadStr = rest.slice(braceIdx, end);
+              skip = end - braceIdx;
+            }
+          }
+          if (payloadStr) {
+            const payload = tryParsePayload(payloadStr);
+            if (payload) this.processGeminiResponse(payload, session);
+            rest = rest.slice(skip).trimStart();
+          } else if (skip > 0) {
+            rest = rest.slice(skip).trimStart();
+          } else {
+            break;
+          }
+        }
+        return rest;
+      };
+
+      response.data.on('data', (chunk: Buffer) => {
+        chunkCount++;
+        const str = chunk.toString();
+        buffer += str;
+        if (chunkCount <= 3) {
+          console.log('[Gemini] stream chunk', chunkCount, 'length', str.length, 'bufferLen', buffer.length);
+        }
+        buffer = extractAndProcess(buffer);
+      });
+      response.data.on('end', () => {
+        if (buffer.trim()) extractAndProcess(buffer);
+        console.log('[Gemini] stream end, total chunks', chunkCount);
+      });
+      response.data.on('error', (err: Error) => {
+        console.error('Gemini stream error:', err);
       });
     } catch (error: any) {
       console.error('Error sending text to Gemini:', error);

@@ -14,7 +14,7 @@ import { JwtService } from '@nestjs/jwt';
 @Injectable()
 @WebSocketGateway({
   namespace: '/notifications',
-  transport: ['websocket'],
+  transport: ['polling', 'websocket'],
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     credentials: true,

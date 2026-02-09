@@ -11,13 +11,15 @@ import { Server, Socket } from 'socket.io';
 import { Injectable } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { GeminiRealtimeService } from '../services/gemini-realtime.service';
-import { DeepgramService } from '../services/deepgram.service';
+import { WhisperService } from '../services/whisper.service';
+import { AiRouterService } from '../services/ai-router.service';
 import { InterviewService } from '../interview.service';
-import { LiveClient } from '@deepgram/sdk';
+import { DailyService } from '../services/daily.service';
+import * as jwt from 'jsonwebtoken';
 
 @Injectable()
 @WebSocketGateway({
-  transport: ['websocket'],
+  transport: ['polling', 'websocket'],
   cors: {
     origin: process.env.FRONTEND_URL || 'http://localhost:3000',
     credentials: true,
@@ -34,18 +36,30 @@ export class InterviewGateway
     {
       socket: Socket;
       geminiSession: any;
-      deepgramConnection: LiveClient | null;
+      audioBuffer: Buffer[];
       transcripts: Array<{ text: string; timestamp: number; language: string }>;
       templateQuestions?: Array<{ id: string; question: string; type: string; order: number; timeLimit?: number }>;
       currentQuestionIndex?: number;
+      language: string;
+      jobTitle?: string;
+      jobDescription?: string;
+      candidateResumeSummary?: string;
+      resumeFollowUpCount?: number;
     }
   >();
+
+  private readonly MAX_RESUME_FOLLOW_UPS = 4;
+
+  private disconnectTimers = new Map<string, NodeJS.Timeout>();
+  private readonly RECONNECT_GRACE_MS = 30000;
 
   constructor(
     private jwtService: JwtService,
     private geminiRealtimeService: GeminiRealtimeService,
-    private deepgramService: DeepgramService,
+    private whisperService: WhisperService,
+    private aiRouter: AiRouterService,
     private interviewService: InterviewService,
+    private dailyService: DailyService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -56,7 +70,26 @@ export class InterviewGateway
         return;
       }
 
-      const payload = this.jwtService.verify(token);
+      let payload: { sub: string; exp?: number };
+      try {
+        payload = this.jwtService.verify(token) as { sub: string; exp?: number };
+      } catch (err: any) {
+        if (err?.name === 'TokenExpiredError') {
+          const secret = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
+          const decoded = jwt.verify(token, secret, { ignoreExpiration: true }) as { sub: string; exp?: number };
+          const nowSec = Math.floor(Date.now() / 1000);
+          const exp = decoded.exp ?? 0;
+          if (nowSec - exp <= 300) {
+            payload = decoded;
+            console.log(`Client reconnected with recently expired token (within 5 min grace)`);
+          } else {
+            throw err;
+          }
+        } else {
+          throw err;
+        }
+      }
+
       client.data.userId = payload.sub;
       client.data.interviewId = client.handshake.query.interviewId as string;
 
@@ -71,17 +104,23 @@ export class InterviewGateway
 
   handleDisconnect(client: Socket) {
     const interviewId = client.data.interviewId;
-    if (interviewId && this.activeInterviews.has(interviewId)) {
+    if (!interviewId || !this.activeInterviews.has(interviewId)) {
+      console.log(`Client disconnected: ${client.data.userId}`);
+      return;
+    }
+    const existing = this.disconnectTimers.get(interviewId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.disconnectTimers.delete(interviewId);
       const session = this.activeInterviews.get(interviewId);
       if (session?.geminiSession) {
         this.geminiRealtimeService.closeSession(session.geminiSession);
       }
-      if (session?.deepgramConnection) {
-        this.deepgramService.closeConnection(session.deepgramConnection);
-      }
       this.activeInterviews.delete(interviewId);
-    }
-    console.log(`Client disconnected: ${client.data.userId}`);
+      console.log(`[Interview ${interviewId}] Session closed after grace period`);
+    }, this.RECONNECT_GRACE_MS);
+    this.disconnectTimers.set(interviewId, timer);
+    console.log(`Client disconnected: ${client.data.userId} (reconnect grace ${this.RECONNECT_GRACE_MS / 1000}s)`);
   }
 
   @SubscribeMessage('start-interview')
@@ -90,9 +129,31 @@ export class InterviewGateway
     @MessageBody() data: { interviewId: string; language: string },
   ) {
     try {
+      const existingSession = this.activeInterviews.get(data.interviewId);
+      const hadDisconnectTimer = this.disconnectTimers.has(data.interviewId);
+      if (existingSession && hadDisconnectTimer) {
+        clearTimeout(this.disconnectTimers.get(data.interviewId)!);
+        this.disconnectTimers.delete(data.interviewId);
+        existingSession.socket = client;
+        if (existingSession.templateQuestions?.length) {
+          client.emit('template-questions', { questions: existingSession.templateQuestions });
+          client.emit('current-question', {
+            question: existingSession.templateQuestions[existingSession.currentQuestionIndex ?? 0],
+            index: existingSession.currentQuestionIndex ?? 0,
+            total: existingSession.templateQuestions.length,
+          });
+        }
+        client.emit('interview-started', { success: true });
+        console.log(`[Interview ${data.interviewId}] Reconnected, session reattached`);
+        return;
+      }
+      if (existingSession && !hadDisconnectTimer) {
+        client.emit('interview-started', { success: true });
+        return;
+      }
+
       const transcripts: Array<{ text: string; timestamp: number; language: string }> = [];
-      
-      // Fetch interview with template questions
+
       const interview = await this.interviewService.getInterview(data.interviewId);
       const templateQuestions = interview.template?.questions?.map(q => ({
         id: q.id,
@@ -131,20 +192,13 @@ export class InterviewGateway
           candidateSkills: candidateSkills as string[],
         },
         (transcript) => {
-          // This is for AI responses (not candidate speech)
-          // Store transcript with timestamp
+          // AI response: emit only ai-message so frontend shows one row (no duplicate with transcript)
           transcripts.push({
             text: transcript.text,
             timestamp: transcript.timestamp || Date.now(),
             language: transcript.language || data.language,
           });
-          
-          // Send transcript to client
-          client.emit('transcript', transcript);
-          // Broadcast to client if connected
-          this.server
-            .to(`client-${data.interviewId}`)
-            .emit('transcript', transcript);
+          client.emit('ai-message', { message: transcript.text });
         },
         (audioChunk) => {
           // Send AI audio response to client
@@ -152,71 +206,28 @@ export class InterviewGateway
         },
       );
 
-      // Create Deepgram connection for transcription
-      const deepgramConnection = this.deepgramService.createLiveConnection(
-        (text, isFinal, timestamp) => {
-          // Store candidate transcript
-          const transcript = {
-            text,
-            timestamp,
-            language: data.language,
-          };
-          
-          transcripts.push(transcript);
-          
-          // Send transcript to client
-          client.emit('transcript', {
-            text,
-            timestamp,
-            language: data.language,
-            isFinal,
-            speaker: 'candidate',
-          });
-          
-          // Broadcast to client if connected
-          this.server
-            .to(`client-${data.interviewId}`)
-            .emit('transcript', {
-              text,
-              timestamp,
-              language: data.language,
-              isFinal,
-              speaker: 'candidate',
-            });
+      const candidateResumeSummary = [
+        interview.candidate?.resumeUrl ? 'Resume on file.' : '',
+        (interview.candidate?.skills as string[])?.length
+          ? `Skills: ${(interview.candidate.skills as string[]).join(', ')}`
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' ') || 'No resume details.';
 
-          // If transcript is final, send to Gemini for AI response
-          if (isFinal && text.trim()) {
-            // Analyze response quality in real-time
-            const session = this.activeInterviews.get(data.interviewId);
-            if (session) {
-              const currentQuestion = session.templateQuestions?.[session.currentQuestionIndex || 0];
-              if (currentQuestion) {
-                const analysis = this.analyzeResponseQuality(text, currentQuestion.question);
-                client.emit('response-quality', analysis);
-              }
-            }
-
-            this.geminiRealtimeService
-              .sendText(geminiSession, text)
-              .catch((error) => {
-                console.error('Error sending text to Gemini:', error);
-                client.emit('error', { message: 'Failed to process response' });
-              });
-          }
-        },
-        (error) => {
-          console.error('Deepgram error:', error);
-          client.emit('error', { message: error.message });
-        },
-      );
-
+      // Session uses audio buffer for Whisper; transcription triggered by client (transcribe-now)
       this.activeInterviews.set(data.interviewId, {
         socket: client,
         geminiSession,
-        deepgramConnection,
+        audioBuffer: [],
         transcripts,
         templateQuestions,
         currentQuestionIndex: 0,
+        language: data.language,
+        jobTitle: jobTitle || undefined,
+        jobDescription: jobDescription ? jobDescription.slice(0, 800) : undefined,
+        candidateResumeSummary: candidateResumeSummary || undefined,
+        resumeFollowUpCount: 0,
       });
 
       // Emit first question if available
@@ -229,8 +240,26 @@ export class InterviewGateway
       }
 
       client.emit('interview-started', { success: true });
+
+      // Clear "Waiting for AI" immediately with a short placeholder; real AI response will follow
+      client.emit('ai-message', { message: 'Starting the interview...' });
+
+      // Trigger AI to speak first: greet by name and ask the first question
+      const firstQuestionText =
+        templateQuestions.length > 0
+          ? templateQuestions[0].question
+          : 'Tell me about yourself and your relevant experience.';
+      const initialPrompt = candidateName && candidateName !== 'Candidate'
+        ? `The candidate ${candidateName} has just joined the interview. Greet them by name (${candidateName}) briefly in one sentence, then ask this first question: "${firstQuestionText}"`
+        : `The candidate has just joined the interview. Greet them briefly in one sentence, then ask this first question: "${firstQuestionText}"`;
+      this.geminiRealtimeService
+        .sendText(geminiSession, initialPrompt)
+        .catch((err) => {
+          console.error('Failed to trigger AI first question:', err);
+          client.emit('error', { message: 'AI could not start the interview' });
+        });
     } catch (error: any) {
-      client.emit('error', { message: error.message });
+      client.emit('error', { message: error?.message ?? 'Interview start failed' });
     }
   }
 
@@ -241,22 +270,127 @@ export class InterviewGateway
   ) {
     try {
       const session = this.activeInterviews.get(data.interviewId);
-      
-      // Send audio to Deepgram for transcription
-      if (session?.deepgramConnection) {
-        const audioBuffer = Buffer.from(data.audio);
-        this.deepgramService.sendAudio(session.deepgramConnection, audioBuffer);
-      } else {
-        // Fallback: if Deepgram is not available, use Gemini directly
-        if (session?.geminiSession) {
-          await this.geminiRealtimeService.sendAudio(
-            session.geminiSession,
-            data.audio,
-          );
-        }
+      if (session?.audioBuffer) {
+        session.audioBuffer.push(Buffer.from(data.audio));
       }
     } catch (error: any) {
-      client.emit('error', { message: error.message });
+      client.emit('error', { message: error?.message ?? 'Request failed' });
+    }
+  }
+
+  @SubscribeMessage('transcribe-now')
+  async handleTranscribeNow(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; audio?: ArrayBuffer },
+  ) {
+    try {
+      const session = this.activeInterviews.get(data.interviewId);
+      if (!session?.geminiSession) {
+        client.emit('transcript', { text: '', isFinal: true, speaker: 'candidate' });
+        return;
+      }
+
+      const hasPayload = data.audio != null && (data.audio as ArrayBuffer).byteLength > 0;
+      const hasBuffer = (session.audioBuffer?.length ?? 0) > 0;
+      if (!hasPayload && !hasBuffer) {
+        client.emit('transcript', { text: '', isFinal: true, speaker: 'candidate' });
+        return;
+      }
+
+      const audioForWhisper = hasPayload
+        ? Buffer.from(data.audio as ArrayBuffer)
+        : Buffer.concat(session.audioBuffer);
+      if (!hasPayload) session.audioBuffer = [];
+
+      let text = '';
+      try {
+        const result = await this.whisperService.transcribe(audioForWhisper, {
+          language: session.language?.slice(0, 2),
+        });
+        text = result.text?.trim() ?? '';
+      } catch (err: any) {
+        console.error('Whisper transcription error:', err);
+        client.emit('error', { message: err?.message ?? 'Transcription failed' });
+        return;
+      }
+
+      const timestamp = Date.now();
+      if (text) {
+        const transcript = { text, timestamp, language: session.language };
+        session.transcripts.push(transcript);
+        client.emit('transcript', {
+          text,
+          timestamp,
+          language: session.language,
+          isFinal: true,
+          speaker: 'candidate',
+        });
+      } else {
+        client.emit('transcription-failed', {
+          message: 'Could not transcribe your speech. Try speaking again and click "Done speaking", or type your answer in the chat below.',
+        });
+        return;
+      }
+
+      const currentQuestion = session.templateQuestions?.[session.currentQuestionIndex ?? 0];
+      if (currentQuestion) {
+        const analysis = await this.aiRouter.evaluateResponse(currentQuestion.question, text);
+        client.emit('response-quality', analysis);
+      }
+
+      const questions = session.templateQuestions ?? [];
+      const idx = session.currentQuestionIndex ?? 0;
+      const nextIndex = idx + 1;
+      const hasNextTemplate = nextIndex < questions.length;
+      const nextQuestion = hasNextTemplate ? questions[nextIndex] : null;
+      const resumeCount = session.resumeFollowUpCount ?? 0;
+      const canAskResumeFollowUp =
+        !hasNextTemplate &&
+        resumeCount < this.MAX_RESUME_FOLLOW_UPS &&
+        (session.jobTitle || session.jobDescription || session.candidateResumeSummary);
+
+      let promptForAI: string;
+      if (hasNextTemplate && nextQuestion) {
+        promptForAI = `The candidate just answered this question: "${currentQuestion?.question ?? 'the last question'}". Their answer: "${text}". Briefly acknowledge their answer in one short sentence, then ask the next interview question: "${nextQuestion.question}". Do not repeat the question number; just ask it naturally.`;
+      } else if (canAskResumeFollowUp) {
+        session.resumeFollowUpCount = resumeCount + 1;
+        const jobContext = [
+          session.jobTitle ? `Job: ${session.jobTitle}.` : '',
+          session.jobDescription ? `Job description (excerpt): ${session.jobDescription}` : '',
+          session.candidateResumeSummary ? `Candidate: ${session.candidateResumeSummary}` : '',
+        ]
+          .filter(Boolean)
+          .join(' ');
+        promptForAI = `The candidate just gave their answer: "${text}". You have the following context: ${jobContext}. Briefly acknowledge what they said in one short sentence, then ask ONE specific follow-up question about their experience, skills, or background that is relevant to the job. Do NOT conclude the interview. Do NOT say "that concludes" or "thank you for your time" yet. Just ask one natural interview question.`;
+      } else {
+        promptForAI = `The candidate just answered this question: "${currentQuestion?.question ?? 'the question'}". Their answer: "${text}". Briefly acknowledge their answer, then thank them and conclude the interview (say we're done and thank them for their time). Say this only once.`;
+      }
+
+      if (hasNextTemplate) {
+        session.currentQuestionIndex = nextIndex;
+      }
+      if (hasNextTemplate && nextQuestion) {
+        client.emit('current-question', {
+          question: nextQuestion,
+          index: nextIndex,
+          total: questions.length,
+        });
+        client.emit('question-completed', { questionIndex: idx });
+      }
+
+      const replyResult = await this.aiRouter.getNextReply(
+        promptForAI,
+        session.language,
+        session.geminiSession,
+      );
+      // Use Gemini to speak the reply (TTS); stream will emit ai-message via onTranscript
+      const sayPrompt = `Say exactly the following to the candidate. Do not add anything else: ${replyResult.text}`;
+      this.geminiRealtimeService.sendText(session.geminiSession, sayPrompt).catch((error) => {
+        console.error('Gemini TTS error:', error);
+        client.emit('ai-message', { message: replyResult.text });
+      });
+    } catch (error: any) {
+      client.emit('error', { message: error?.message ?? 'Transcription failed' });
     }
   }
 
@@ -286,7 +420,7 @@ export class InterviewGateway
         total: session.templateQuestions.length,
       });
     } catch (error: any) {
-      client.emit('error', { message: error.message });
+      client.emit('error', { message: error?.message ?? 'Request failed' });
     }
   }
 
@@ -316,7 +450,7 @@ export class InterviewGateway
         total: session.templateQuestions.length,
       });
     } catch (error: any) {
-      client.emit('error', { message: error.message });
+      client.emit('error', { message: error?.message ?? 'Request failed' });
     }
   }
 
@@ -333,7 +467,7 @@ export class InterviewGateway
 
       client.emit('question-completed', { questionIndex: data.questionIndex });
     } catch (error: any) {
-      client.emit('error', { message: error.message });
+      client.emit('error', { message: error?.message ?? 'Request failed' });
     }
   }
 
@@ -349,52 +483,84 @@ export class InterviewGateway
         return;
       }
 
-      // Get current question context
       const currentQuestion = session.templateQuestions?.[session.currentQuestionIndex || 0];
-      
-      // Analyze response quality (simplified - in production, use AI)
-      const analysis = this.analyzeResponseQuality(data.response, currentQuestion?.question || '');
-
+      const analysis = await this.aiRouter.evaluateResponse(
+        currentQuestion?.question || '',
+        data.response,
+      );
       client.emit('response-quality', analysis);
     } catch (error: any) {
-      client.emit('error', { message: error.message });
+      client.emit('error', { message: error?.message ?? 'Request failed' });
     }
   }
 
-  private analyzeResponseQuality(response: string, question: string): {
-    completeness: number;
-    relevance: number;
-    clarity: number;
-    suggestions?: string[];
-  } {
-    const words = response.split(/\s+/).length;
-    const sentences = response.split(/[.!?]+/).filter(s => s.trim().length > 0).length;
-    
-    // Completeness: based on response length and structure
-    const completeness = Math.min(100, Math.max(0, 
-      (words > 20 ? 30 : 0) + 
-      (sentences > 2 ? 30 : 0) + 
-      (response.length > 100 ? 40 : 0)
-    ));
+  @SubscribeMessage('send-message')
+  async handleSendMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string; message: string },
+  ) {
+    try {
+      const session = this.activeInterviews.get(data.interviewId);
+      if (!session?.geminiSession) {
+        client.emit('error', { message: 'Interview session not ready yet' });
+        return;
+      }
+      if (!data.message?.trim()) return;
+      this.geminiRealtimeService
+        .sendText(session.geminiSession, data.message.trim())
+        .catch((err) => {
+          console.error('send-message: Gemini error:', err);
+          client.emit('error', { message: 'Failed to send message to interviewer' });
+        });
+    } catch (error: any) {
+      client.emit('error', { message: error?.message ?? 'Request failed' });
+    }
+  }
 
-    // Relevance: check for question keywords (simplified)
-    const questionKeywords = question.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-    const responseLower = response.toLowerCase();
-    const matchingKeywords = questionKeywords.filter(kw => responseLower.includes(kw)).length;
-    const relevance = Math.min(100, (matchingKeywords / Math.max(1, questionKeywords.length)) * 100);
+  @SubscribeMessage('join-ai-to-room')
+  async handleJoinAiToRoom(
+    @ConnectedSocket() client: Socket,
+    @MessageBody()
+    data: { interviewId: string; dailyRoomId: string; language: string },
+  ) {
+    try {
+      // Acknowledge immediately so frontend does not show "no response" error
+      client.emit('ai-join-request-received');
 
-    // Clarity: based on sentence structure and length
-    const avgSentenceLength = words / Math.max(1, sentences);
-    const clarity = Math.min(100, Math.max(0,
-      100 - Math.abs(avgSentenceLength - 15) * 2 // Optimal around 15 words per sentence
-    ));
+      const { dailyRoomId } = data;
+      if (!dailyRoomId) {
+        client.emit('ai-joined-room', {
+          message: 'AI join requested but no room ID provided',
+        });
+        return;
+      }
 
-    const suggestions: string[] = [];
-    if (completeness < 50) suggestions.push('Try to provide more detail in your answer');
-    if (relevance < 50) suggestions.push('Focus more on directly addressing the question');
-    if (clarity < 50) suggestions.push('Try to structure your answer more clearly');
+      const dailyDomain =
+        process.env.DAILY_MEETING_DOMAIN ||
+        process.env.DAILY_DOMAIN ||
+        'staffenza';
+      const roomUrl = `https://${dailyDomain}.daily.co/${dailyRoomId}`;
 
-    return { completeness, relevance, clarity, suggestions };
+      try {
+        const token = await this.dailyService.getRoomToken(dailyRoomId, 'ai-interviewer');
+        client.emit('ai-joined-room', {
+          message: 'AI can join the video room',
+          token,
+          roomUrl,
+          dailyRoomId,
+        });
+      } catch (tokenError: any) {
+        console.warn('Could not create Daily token for AI participant:', tokenError?.message);
+        client.emit('ai-joined-room', {
+          message: 'AI join requested; token not available (check DAILY_API_KEY)',
+          roomUrl,
+          dailyRoomId,
+        });
+      }
+    } catch (error: any) {
+      client.emit('ai-join-request-received');
+      client.emit('error', { message: error?.message || 'Failed to process AI join request' });
+    }
   }
 
   @SubscribeMessage('end-interview')
@@ -405,14 +571,8 @@ export class InterviewGateway
     try {
       const session = this.activeInterviews.get(data.interviewId);
       
-      // Close Gemini session
       if (session?.geminiSession) {
         await this.geminiRealtimeService.closeSession(session.geminiSession);
-      }
-      
-      // Close Deepgram connection
-      if (session?.deepgramConnection) {
-        this.deepgramService.closeConnection(session.deepgramConnection);
       }
 
       // Collect transcripts from session or use provided data
@@ -435,7 +595,7 @@ export class InterviewGateway
       this.activeInterviews.delete(data.interviewId);
       client.emit('interview-ended', { success: true });
     } catch (error: any) {
-      client.emit('error', { message: error.message });
+      client.emit('error', { message: error?.message ?? 'Request failed' });
     }
   }
 }

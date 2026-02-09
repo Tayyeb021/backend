@@ -78,7 +78,7 @@ export class ResumeParserService {
     }
 
     try {
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
       const prompt = `Extract structured data from this resume text. Return a JSON object with the following fields:
 
 {

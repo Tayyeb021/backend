@@ -14,7 +14,7 @@ export class GeminiService {
     jobDescription: string,
     language: string = 'en',
   ): Promise<string[]> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `Generate 5 interview questions for the following job description. 
     Questions should be in ${language} language and cover technical skills, experience, and cultural fit.
@@ -55,7 +55,7 @@ export class GeminiService {
     strengths: string[];
     weaknesses: string[];
   }> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `Evaluate the candidate's answer to an interview question.
     
@@ -100,7 +100,7 @@ export class GeminiService {
     scores: any,
     language: string = 'en',
   ): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
 
     const prompt = `Generate a professional interview summary in ${language} language.
     

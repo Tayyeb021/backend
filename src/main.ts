@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe, BadRequestException } from '@nestjs/common';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -9,6 +10,8 @@ async function bootstrap() {
       credentials: true,
     },
   });
+
+  app.useWebSocketAdapter(new IoAdapter(app));
 
   // Enable CORS
   app.enableCors({

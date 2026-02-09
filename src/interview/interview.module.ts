@@ -7,7 +7,9 @@ import { InterviewTemplateService } from './interview-template.service';
 import { DailyService } from './services/daily.service';
 import { GeminiService } from './services/gemini.service';
 import { GeminiRealtimeService } from './services/gemini-realtime.service';
-import { DeepgramService } from './services/deepgram.service';
+import { WhisperService } from './services/whisper.service';
+import { OpenaiInterviewService } from './services/openai-interview.service';
+import { AiRouterService } from './services/ai-router.service';
 import { InterviewOptimizerService } from './services/interview-optimizer.service';
 import { SchedulingService } from './services/scheduling.service';
 import { InterviewGateway } from './gateways/interview.gateway';
@@ -40,7 +42,9 @@ import { EvidenceModule } from '../evidence/evidence.module';
     DailyService,
     GeminiService,
     GeminiRealtimeService,
-    DeepgramService,
+    WhisperService,
+    OpenaiInterviewService,
+    AiRouterService,
     InterviewOptimizerService,
     SchedulingService,
     InterviewGateway,
