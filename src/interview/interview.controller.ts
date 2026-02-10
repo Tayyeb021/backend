@@ -10,12 +10,23 @@ import {
   Patch,
   UseInterceptors,
   UploadedFile,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { InterviewService } from './interview.service';
 import { InterviewVideoRecordingService } from './services/interview-video-recording.service';
+import { VideoProcessingService } from './services/video-processing.service';
+import { TTSService } from './services/tts.service';
+import { InterviewTempStorageService } from './services/interview-temp-storage.service';
 import { CreateInterviewDto } from './dto/update-create-interview.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import * as path from 'path';
+import * as fs from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 @Controller('interviews')
 @UseGuards(JwtAuthGuard)
@@ -23,6 +34,9 @@ export class InterviewController {
   constructor(
     private interviewService: InterviewService,
     private videoRecordingService: InterviewVideoRecordingService,
+    private videoProcessingService: VideoProcessingService,
+    private ttsService: TTSService,
+    private tempStorageService: InterviewTempStorageService,
   ) {}
 
   @Post()
@@ -178,40 +192,46 @@ export class InterviewController {
     }
 
     const chunkIndex = parseInt(body.chunkIndex, 10);
-    const result = await this.videoRecordingService.uploadVideoChunk(
-      id,
-      chunkIndex,
-      file.buffer,
-      file.mimetype || 'video/webm',
-    );
-
-    return {
-      success: true,
-      key: result.key,
-      url: result.url,
-      chunkIndex,
-    };
+    
+    // Ensure temp directory exists
+    const tempDir = await this.tempStorageService.ensureTempDirExists(id);
+    
+    const chunkPath = path.join(tempDir, `chunk-${chunkIndex}.webm`);
+    
+    // Retry logic for EBUSY errors (file might be locked during merge)
+    let retries = 3;
+    let lastError: any;
+    
+    while (retries > 0) {
+      try {
+        await fs.promises.writeFile(chunkPath, file.buffer);
+        return {
+          success: true,
+          chunkIndex,
+          message: `Chunk ${chunkIndex} stored in temp folder`,
+        };
+      } catch (error: any) {
+        lastError = error;
+        if (error.code === 'EBUSY' && retries > 1) {
+          // File is locked, wait a bit and retry
+          await new Promise(resolve => setTimeout(resolve, 100));
+          retries--;
+        } else {
+          throw error;
+        }
+      }
+    }
+    
+    throw new Error(`Failed to write chunk after retries: ${lastError?.message}`);
   }
 
   @Post(':id/live/upload-complete')
-  @UseInterceptors(FileInterceptor('video'))
   async uploadCompleteVideo(
     @Param('id') id: string,
-    @UploadedFile() file: Express.Multer.File,
     @Request() req,
   ) {
-    if (!file) {
-      throw new Error('No video file provided');
-    }
-
-    const result = await this.videoRecordingService.uploadCompleteVideo(
-      id,
-      file.buffer,
-      file.mimetype || 'video/webm',
-    );
-
-    // Just save the video URL, don't evaluate the interview yet
-    // TODO: Add interview evaluation later
+    // Concatenate video chunks and mix AI audio, then upload final video
+    const result = await this.videoProcessingService.processVideoChunksWithAudio(id);
 
     return {
       success: true,
@@ -246,5 +266,74 @@ export class InterviewController {
   ) {
     const url = await this.videoRecordingService.getPresignedPlaybackUrl(key);
     return { url };
+  }
+
+  @Post(':id/live/merge-chunks')
+  async mergeVideoChunks(
+    @Param('id') id: string,
+    @Request() req,
+  ) {
+    const result = await this.videoProcessingService.mergeVideoChunks(id);
+    return {
+      success: true,
+      key: result.key,
+      url: result.url,
+    };
+  }
+
+  @Post(':id/live/tts-audio')
+  async generateTTSAudio(
+    @Param('id') id: string,
+    @Body() body: { text: string; language: string; timestamp?: number },
+    @Request() req,
+    @Res() res: Response,
+  ) {
+    try {
+      if (!body.text || body.text.trim().length === 0) {
+        return res.status(400).json({
+          error: 'Text is required for TTS generation',
+          message: 'Falling back to browser speech synthesis',
+        });
+      }
+
+      // Generate audio using TTS service
+      const audioBuffer = await this.ttsService.generateSpeech(
+        body.text,
+        body.language || 'en',
+      );
+
+      // Store audio in temp folder with timestamp if provided
+      if (body.timestamp !== undefined) {
+        const tempDir = await this.tempStorageService.ensureTempDirExists(id);
+        const audioPath = path.join(tempDir, `tts-${body.timestamp}.mp3`);
+        
+        // Retry logic for EBUSY errors
+        let retries = 3;
+        while (retries > 0) {
+          try {
+            await fs.promises.writeFile(audioPath, audioBuffer);
+            break;
+          } catch (error: any) {
+            if (error.code === 'EBUSY' && retries > 1) {
+              await new Promise(resolve => setTimeout(resolve, 100));
+              retries--;
+            } else {
+              throw error;
+            }
+          }
+        }
+      }
+
+      // Return audio directly as MP3 for immediate playback
+      res.setHeader('Content-Type', 'audio/mpeg');
+      res.setHeader('Content-Length', audioBuffer.length.toString());
+      res.send(audioBuffer);
+    } catch (error: any) {
+      // Return error but don't throw - frontend will fall back to speech synthesis
+      res.status(500).json({
+        error: error.message || 'TTS generation failed',
+        message: 'Falling back to browser speech synthesis',
+      });
+    }
   }
 }

@@ -10,9 +10,11 @@ import { VideoProcessingService } from './services/video-processing.service';
 import { InterviewOptimizerService } from './services/interview-optimizer.service';
 import { SchedulingService } from './services/scheduling.service';
 import { InterviewVideoRecordingService } from './services/interview-video-recording.service';
+import { InterviewTempStorageService } from './services/interview-temp-storage.service';
 import { LiveInterviewDeepgramService } from './services/live-interview-deepgram.service';
 import { LiveInterviewGeminiService } from './services/live-interview-gemini.service';
 import { NewInterviewDeepgramService } from './services/new-interview-deepgram.service';
+import { TTSService } from './services/tts.service';
 import { InterviewGateway } from './gateways/interview.gateway';
 import { LiveInterviewGateway } from './gateways/live-interview.gateway';
 import { NewInterviewGateway } from './gateways/new-interview.gateway';
@@ -44,9 +46,11 @@ import { SourcingModule } from '../sourcing/sourcing.module';
     InterviewOptimizerService,
     SchedulingService,
     InterviewVideoRecordingService,
+    InterviewTempStorageService,
     LiveInterviewDeepgramService,
     LiveInterviewGeminiService,
     NewInterviewDeepgramService,
+    TTSService,
     InterviewGateway,
     LiveInterviewGateway,
     NewInterviewGateway,

@@ -37,3 +37,6 @@ logs/
 # Misc
 *.pem
 .cache/
+
+# Temp files for interview processing
+temp/

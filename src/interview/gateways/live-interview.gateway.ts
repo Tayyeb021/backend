@@ -13,6 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LiveInterviewDeepgramService } from '../services/live-interview-deepgram.service';
 import { LiveInterviewGeminiService } from '../services/live-interview-gemini.service';
+import { InterviewTempStorageService } from '../services/interview-temp-storage.service';
 import { LiveClient } from '@deepgram/sdk';
 import { InterviewStatus } from '@prisma/client';
 
@@ -53,6 +54,8 @@ interface InterviewSession {
   lastProcessedTranscript: string; // Track last processed transcript to avoid duplicates
   isGeneratingQuestion: boolean; // Lock to prevent concurrent question generation
   preGeneratedGreeting?: string; // Pre-generated greeting to reduce start delay
+  durationCheckTimer?: NodeJS.Timeout; // Timer to check if 5 minutes have passed and end interview gracefully
+  keepaliveInterval?: NodeJS.Timeout; // Keepalive interval to prevent Deepgram connection timeout
 }
 
 @WebSocketGateway({
@@ -68,12 +71,15 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
 
   private readonly logger = new Logger(LiveInterviewGateway.name);
   private sessions = new Map<string, InterviewSession>();
+  // Temporary storage for audio chunks keyed by interviewId (for fallback when session is lost)
+  private audioChunkStorage = new Map<string, { chunks: Buffer[]; lastUpdated: number }>();
 
   constructor(
     private jwtService: JwtService,
     private prisma: PrismaService,
     private deepgramService: LiveInterviewDeepgramService,
     private geminiService: LiveInterviewGeminiService,
+    private tempStorageService: InterviewTempStorageService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -117,6 +123,19 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
         if (session.interimStableTimer) {
           clearTimeout(session.interimStableTimer);
           session.interimStableTimer = undefined;
+        }
+        
+        // Clear duration check timer if exists
+        if (session.durationCheckTimer) {
+          clearTimeout(session.durationCheckTimer);
+          session.durationCheckTimer = undefined;
+        }
+        
+        // Clear keepalive interval if exists
+        if (session.keepaliveInterval) {
+          clearInterval(session.keepaliveInterval);
+          session.keepaliveInterval = undefined;
+          this.logger.log(`[Session ${sessionId}] Keepalive interval cleared`);
         }
         
         if (session?.deepgramConnection) {
@@ -220,51 +239,9 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
 
       this.logger.log(`User ${userId} joined interview ${interviewId}`);
 
-      // Pre-generate greeting in parallel to reduce start delay
-      // This way the greeting is ready when 'start-interview' is called
-      this.geminiService.initializeInterview(session.interviewContext)
-        .then((greeting) => {
-          const currentSession = this.sessions.get(sessionId);
-          if (currentSession && !currentSession.isInterviewStarted) {
-            currentSession.preGeneratedGreeting = greeting;
-            this.logger.log(`[Session ${sessionId}] ✅ Greeting pre-generated: "${greeting.substring(0, 50)}..."`);
-          }
-        })
-        .catch((error) => {
-          this.logger.error(`[Session ${sessionId}] Failed to pre-generate greeting:`, error);
-          // Don't fail the join - greeting will be generated on start-interview as fallback
-        });
-
-      // Notify client that interview is ready to start
-      // Client should emit 'start-interview' when camera stream is loaded
-      client.emit('interview-ready', {
-        interviewId,
-        jobTitle: interview.job.title,
-        message: 'Interview ready. Waiting for camera stream...',
-      });
-    } catch (error: any) {
-      this.logger.error('Error joining interview:', error);
-      client.emit('error', { message: error.message || 'Failed to join interview' });
-    }
-  }
-
-  @SubscribeMessage('start-interview')
-  async handleStartInterview(
-    @ConnectedSocket() client: Socket,
-    @MessageBody() data: { interviewId: string },
-  ) {
-    try {
-      const sessionId = client.data.sessionId;
-      const session = this.sessions.get(sessionId);
-
-      if (!session) {
-        client.emit('error', { message: 'Session not found' });
-        return;
-      }
-
-      // CRITICAL: Create Deepgram connection FIRST before marking interview as started
-      // This ensures connection is available when audio chunks arrive
-      this.logger.log(`[Session ${sessionId}] Creating Deepgram connection BEFORE starting interview...`);
+      // CRITICAL: Create Deepgram connection IMMEDIATELY when user joins
+      // This ensures Deepgram is ready BEFORE the interview starts
+      this.logger.log(`[Session ${sessionId}] Creating Deepgram connection during join-interview...`);
       session.deepgramConnectionOpen = false;
       session.audioChunkQueue = []; // Initialize queue
       session.isReconnecting = false;
@@ -285,18 +262,16 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
           session.deepgramConnectionOpen = true;
           this.logger.log(`[Session ${sessionId}] ✅ Deepgram connection is now open and ready`);
           
-          // Notify frontend that Deepgram is ready to receive audio
+          // Notify frontend that Deepgram is ready
           client.emit('deepgram-ready', { message: 'Deepgram connection is ready' });
           
-          // Flush queued audio chunks (send in real-time intervals to avoid burst)
+          // Flush queued audio chunks if any (shouldn't be any at this point)
           const queuedChunks = session.audioChunkQueue.length;
           if (queuedChunks > 0) {
             this.logger.log(`[Session ${sessionId}] Flushing ${queuedChunks} queued audio chunks...`);
             const queue = [...session.audioChunkQueue];
             session.audioChunkQueue = [];
             
-            // Send chunks with small delays to maintain real-time flow
-            // Each chunk is ~256ms of audio, so send them with ~250ms intervals
             queue.forEach((chunk, index) => {
               setTimeout(() => {
                 try {
@@ -304,134 +279,158 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
                 } catch (error) {
                   this.logger.error(`[Session ${sessionId}] Error sending queued chunk:`, error);
                 }
-              }, index * 250); // 250ms intervals to maintain real-time flow
+              }, index * 100);
             });
-            this.logger.log(`[Session ${sessionId}] ✅ Queued chunks scheduled for sending`);
-          } else {
-            this.logger.log(`[Session ${sessionId}] ✅ Deepgram ready - no queued chunks to flush`);
           }
+          
+          // NOW notify client that interview is ready to start (Deepgram is confirmed ready)
+          // Client should emit 'start-interview' when camera stream is loaded
+          client.emit('interview-ready', {
+            interviewId,
+            jobTitle: interview.job.title,
+            message: 'Interview ready. Deepgram connection established. Waiting for camera stream...',
+          });
+          
+          // CRITICAL: Set up keepalive to prevent Deepgram connection timeout
+          // Deepgram closes connections after ~12 seconds of inactivity
+          // Send silence packets every 5 seconds to keep connection alive
+          const keepaliveInterval = setInterval(() => {
+            const currentSession = this.sessions.get(sessionId);
+            if (!currentSession || !currentSession.deepgramConnection || currentSession.isDisconnecting) {
+              clearInterval(keepaliveInterval);
+              return;
+            }
+            
+            // Check if connection is still open
+            if (currentSession.deepgramConnection.getReadyState() !== 1) {
+              this.logger.warn(`[Session ${sessionId}] Deepgram connection not open, stopping keepalive`);
+              clearInterval(keepaliveInterval);
+              currentSession.keepaliveInterval = undefined;
+              return;
+            }
+            
+            // Send a small silence packet (320 bytes = 10ms of 16kHz 16-bit mono audio)
+            // This keeps the connection alive without affecting transcription
+            const silenceDuration = 0.01; // 10ms
+            const sampleRate = 16000;
+            const samples = Math.floor(sampleRate * silenceDuration);
+            const silenceBuffer = Buffer.alloc(samples * 2); // 16-bit = 2 bytes per sample
+            silenceBuffer.fill(0); // Fill with silence (zero)
+            
+            try {
+              this.deepgramService.sendAudio(currentSession.deepgramConnection, silenceBuffer, true);
+            } catch (error) {
+              this.logger.error(`[Session ${sessionId}] Error sending keepalive:`, error);
+              clearInterval(keepaliveInterval);
+              currentSession.keepaliveInterval = undefined;
+            }
+          }, 5000); // Send every 5 seconds
+          
+          // Store interval ID to clear it on disconnect
+          session.keepaliveInterval = keepaliveInterval;
+          this.logger.log(`[Session ${sessionId}] ✅ Keepalive interval started (every 5 seconds)`);
         },
       );
 
-      // Also track close event
+      // Track close event
       deepgramConnection.on('close', (event?: any) => {
-        // Check if session still exists and is not disconnecting
         const currentSession = this.sessions.get(sessionId);
         if (!currentSession || currentSession.isDisconnecting) {
-          this.logger.debug(`[Session ${sessionId}] Deepgram connection closed but session is disconnecting or doesn't exist - skipping reconnection`);
-          return; // Don't attempt reconnection if session is being cleaned up
+          return;
         }
         
         currentSession.deepgramConnectionOpen = false;
-        const queuedChunks = currentSession.audioChunkQueue.length;
-        
         this.logger.warn(`[Session ${sessionId}] ⚠️ Deepgram connection closed`);
-        if (event) {
-          this.logger.warn(`[Session ${sessionId}] Close event:`, JSON.stringify(event, null, 2));
-        }
         
-        // Check if this is an unexpected close (not from end-interview or disconnect)
         if (currentSession.isInterviewStarted && !currentSession.isDisconnecting) {
-          this.logger.warn(`[Session ${sessionId}] Deepgram connection closed during active interview`);
-          
-          // Check close code to determine if it's an error
-          const isError = event?.code && event.code !== 1000; // 1000 = normal close
-          
+          const isError = event?.code && event.code !== 1000;
           if (isError && currentSession.reconnectAttempts < 3) {
-            // Attempt automatic reconnection
             this.logger.log(`[Session ${sessionId}] Attempting to reconnect Deepgram (attempt ${currentSession.reconnectAttempts + 1}/3)...`);
-            this.reconnectDeepgram(sessionId, client, queuedChunks);
-          } else if (currentSession.reconnectAttempts >= 3) {
-            this.logger.error(`[Session ${sessionId}] ❌ Max reconnection attempts reached. Connection cannot be restored.`);
-            currentSession.audioChunkQueue = []; // Clear queue after max attempts
-            if (client.connected) {
-              client.emit('error', { message: 'Transcription connection lost after multiple reconnection attempts. Please refresh and try again.' });
-            }
-          } else {
-            // Normal close or intentional disconnect
-            currentSession.audioChunkQueue = []; // Clear queue on normal close
-            if (queuedChunks > 0) {
-              this.logger.warn(`[Session ${sessionId}] Lost ${queuedChunks} queued audio chunks due to connection close`);
-            }
-          }
-        } else {
-          // Interview not started yet or disconnecting, just clear queue
-          if (currentSession) {
-            currentSession.audioChunkQueue = [];
+            this.reconnectDeepgram(sessionId, client, currentSession.audioChunkQueue.length);
           }
         }
       });
 
       session.deepgramConnection = deepgramConnection;
-      this.logger.log(`[Session ${sessionId}] Deepgram connection created, waiting for open event...`);
+      this.logger.log(`[Session ${sessionId}] Deepgram connection created, waiting for open event before emitting interview-ready...`);
+
+      // Pre-generate greeting in parallel to reduce start delay
+      // This way the greeting is ready when 'start-interview' is called
+      this.geminiService.initializeInterview(session.interviewContext)
+        .then((greeting) => {
+          const currentSession = this.sessions.get(sessionId);
+          if (currentSession && !currentSession.isInterviewStarted) {
+            currentSession.preGeneratedGreeting = greeting;
+            this.logger.log(`[Session ${sessionId}] ✅ Greeting pre-generated: "${greeting.substring(0, 50)}..."`);
+          }
+        })
+        .catch((error) => {
+          this.logger.error(`[Session ${sessionId}] Failed to pre-generate greeting:`, error);
+          // Don't fail the join - greeting will be generated on start-interview as fallback
+        });
+    } catch (error: any) {
+      this.logger.error('Error joining interview:', error);
+      client.emit('error', { message: error.message || 'Failed to join interview' });
+    }
+  }
+
+  @SubscribeMessage('start-interview')
+  async handleStartInterview(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string },
+  ) {
+    try {
+      const sessionId = client.data.sessionId;
+      const session = this.sessions.get(sessionId);
+
+      if (!session) {
+        client.emit('error', { message: 'Session not found' });
+        return;
+      }
+
+      // CRITICAL: Deepgram connection should already be created during join-interview
+      // Verify it's ready before starting the interview
+      if (!session.deepgramConnection) {
+        this.logger.error(`[Session ${sessionId}] ❌ Deepgram connection not found! Cannot start interview.`);
+        client.emit('error', { message: 'Deepgram connection not ready. Please refresh and try again.' });
+        return;
+      }
+
+      if (!session.deepgramConnectionOpen) {
+        this.logger.warn(`[Session ${sessionId}] ⚠️ Deepgram connection not open yet. Waiting for connection...`);
+        // Wait up to 5 seconds for Deepgram to be ready
+        let attempts = 0;
+        const maxAttempts = 50; // 5 seconds (50 * 100ms)
+        while (!session.deepgramConnectionOpen && attempts < maxAttempts) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+          attempts++;
+        }
+        
+        if (!session.deepgramConnectionOpen) {
+          this.logger.error(`[Session ${sessionId}] ❌ Deepgram connection not ready after waiting. Cannot start interview.`);
+          client.emit('error', { message: 'Deepgram connection not ready. Please refresh and try again.' });
+          return;
+        }
+      }
+
+      this.logger.log(`[Session ${sessionId}] ✅ Deepgram connection confirmed ready. Starting interview...`);
       
-      // NOW mark interview as started - connection exists (even if not open yet)
-      // Audio chunks will be queued until connection opens
+      // Clean up any old temp files before starting interview
+      try {
+        await this.tempStorageService.cleanupInterviewTempDir(data.interviewId);
+        this.logger.log(`[Session ${sessionId}] ✅ Cleaned up temp directory for interview ${data.interviewId}`);
+      } catch (error: any) {
+        this.logger.warn(`[Session ${sessionId}] ⚠️ Failed to cleanup temp directory: ${error.message}`);
+        // Don't block interview start if cleanup fails
+      }
+      
+      // Mark interview as started
       session.isInterviewStarted = true;
       session.startedAt = new Date(); // Track when interview actually starts
-      this.logger.log(`[Session ${sessionId}] Interview started at ${session.startedAt.toISOString()} (Deepgram connection created, waiting for open event)`);
-
-      // Check if connection opens after a delay (some SDK versions open asynchronously)
-      // Note: Deepgram connections typically take 1-3 seconds to establish, which is normal
-      setTimeout(() => {
-        if (!session.deepgramConnectionOpen) {
-          // This is informational - connection may still be establishing
-          this.logger.debug(`[Session ${sessionId}] Deepgram connection still establishing after 2 seconds (this is normal)`);
-          this.logger.debug(`[Session ${sessionId}] Queued chunks: ${session.audioChunkQueue.length} (will be sent when connection opens)`);
-          
-          // Try to check connection state - some SDKs might have a readyState property
-          if (deepgramConnection && typeof (deepgramConnection as any).getReadyState === 'function') {
-            const readyState = (deepgramConnection as any).getReadyState();
-            // readyState: 0=CONNECTING (normal), 1=OPEN, 2=CLOSING, 3=CLOSED
-            if (readyState === 0) {
-              this.logger.debug(`[Session ${sessionId}] Connection state: CONNECTING (readyState: 0) - waiting...`);
-            } else {
-              this.logger.warn(`[Session ${sessionId}] Unexpected readyState: ${readyState}`);
-            }
-          }
-        } else {
-          this.logger.log(`[Session ${sessionId}] ✅ Deepgram connection confirmed open`);
-        }
-      }, 2000);
-
-      // Fallback: If connection still not open after 4 seconds, force it open and start sending
-      // This handles cases where the open event doesn't fire but connection is actually ready
-      setTimeout(() => {
-        if (!session.deepgramConnectionOpen && session.audioChunkQueue.length > 0) {
-          this.logger.warn(`[Session ${sessionId}] ⚠️ Connection still not open after 4 seconds with ${session.audioChunkQueue.length} queued chunks`);
-          this.logger.warn(`[Session ${sessionId}] Forcing connection open (fallback mode) - connection may be ready but event didn't fire`);
-          
-          // Force connection to open state
-          session.deepgramConnectionOpen = true;
-          
-          // Try sending a test chunk to see if connection is actually ready
-          if (session.audioChunkQueue.length > 0) {
-            const testChunk = session.audioChunkQueue[0];
-            try {
-              this.deepgramService.sendAudio(deepgramConnection, testChunk);
-              this.logger.log(`[Session ${sessionId}] ✅ Test chunk sent successfully - connection appears to be working`);
-              
-              // Flush queue with real-time intervals
-              const queue = [...session.audioChunkQueue];
-              session.audioChunkQueue = [];
-              
-              queue.forEach((chunk, index) => {
-                setTimeout(() => {
-                  try {
-                    this.deepgramService.sendAudio(deepgramConnection, chunk);
-                  } catch (error) {
-                    this.logger.error(`[Session ${sessionId}] Error sending queued chunk:`, error);
-                  }
-                }, index * 250);
-              });
-              this.logger.log(`[Session ${sessionId}] ✅ Queued chunks scheduled for sending (fallback mode)`);
-            } catch (error) {
-              this.logger.error(`[Session ${sessionId}] ❌ Failed to send test chunk - connection is not ready:`, error);
-              session.deepgramConnectionOpen = false;
-            }
-          }
-        }
-      }, 4000);
+      this.logger.log(`[Session ${sessionId}] ✅ Interview marked as started at ${session.startedAt.toISOString()}`);
+      
+      // Start automatic duration check timer to end interview gracefully at 5 minutes
+      this.startDurationCheckTimer(sessionId, client);
 
       // Use pre-generated greeting if available, otherwise generate it now
       let greeting: string;
@@ -468,6 +467,165 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
     }
   }
 
+  @SubscribeMessage('ensure-deepgram-ready')
+  async handleEnsureDeepgramReady(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { interviewId: string },
+  ) {
+    const sessionId = client.data.sessionId;
+    try {
+      const session = this.sessions.get(sessionId);
+      
+      if (!session) {
+        this.logger.warn(`[Session ${sessionId}] Ensure Deepgram ready but session not found`);
+        client.emit('deepgram-status', { ready: false, message: 'Session not found' });
+        return;
+      }
+
+      // Check if Deepgram connection exists
+      if (!session.deepgramConnection) {
+        this.logger.warn(`[Session ${sessionId}] Deepgram connection does not exist, creating now...`);
+        // Create Deepgram connection immediately
+        try {
+          const deepgramConnection = this.deepgramService.createLiveConnection(
+            (text: string, isFinal: boolean) => {
+              this.handleTranscript(sessionId, text, isFinal, client);
+            },
+            (error: Error) => {
+              this.logger.error(`[Session ${sessionId}] Deepgram error:`, error);
+              session.deepgramConnectionOpen = false;
+              session.audioChunkQueue = [];
+              client.emit('error', { message: 'Transcription error' });
+            },
+            () => {
+              // onOpen callback
+              session.deepgramConnectionOpen = true;
+              this.logger.log(`[Session ${sessionId}] ✅ Deepgram connection opened (created on demand)`);
+              client.emit('deepgram-ready', { message: 'Deepgram connection is ready' });
+              
+              // Flush queued chunks
+              if (session.audioChunkQueue.length > 0) {
+                this.logger.log(`[Session ${sessionId}] Flushing ${session.audioChunkQueue.length} queued chunks...`);
+                const queue = [...session.audioChunkQueue];
+                session.audioChunkQueue = [];
+                
+                queue.forEach((chunk, index) => {
+                  setTimeout(() => {
+                    try {
+                      this.deepgramService.sendAudio(deepgramConnection, chunk);
+                    } catch (error) {
+                      this.logger.error(`[Session ${sessionId}] Error sending queued chunk:`, error);
+                    }
+                  }, index * 50);
+                });
+              }
+              
+              // Start keepalive
+              if (session.keepaliveInterval) {
+                clearInterval(session.keepaliveInterval);
+              }
+              
+              const keepaliveInterval = setInterval(() => {
+                const currentSession = this.sessions.get(sessionId);
+                if (!currentSession || !currentSession.deepgramConnection || currentSession.isDisconnecting) {
+                  clearInterval(keepaliveInterval);
+                  return;
+                }
+                
+                if (currentSession.deepgramConnection.getReadyState() !== 1) {
+                  clearInterval(keepaliveInterval);
+                  currentSession.keepaliveInterval = undefined;
+                  return;
+                }
+                
+                const silenceDuration = 0.01;
+                const sampleRate = 16000;
+                const samples = Math.floor(sampleRate * silenceDuration);
+                const silenceBuffer = Buffer.alloc(samples * 2);
+                silenceBuffer.fill(0);
+                
+                try {
+                  this.deepgramService.sendAudio(currentSession.deepgramConnection, silenceBuffer, true);
+                } catch (error) {
+                  this.logger.error(`[Session ${sessionId}] Error sending keepalive:`, error);
+                  clearInterval(keepaliveInterval);
+                  currentSession.keepaliveInterval = undefined;
+                }
+              }, 5000);
+              
+              session.keepaliveInterval = keepaliveInterval;
+            },
+          );
+
+          deepgramConnection.on('close', (event?: any) => {
+            const currentSession = this.sessions.get(sessionId);
+            if (!currentSession || currentSession.isDisconnecting) {
+              return;
+            }
+            
+            currentSession.deepgramConnectionOpen = false;
+            this.logger.warn(`[Session ${sessionId}] ⚠️ Deepgram connection closed`);
+            
+            if (currentSession.isInterviewStarted && !currentSession.isDisconnecting) {
+              const isError = event?.code && event.code !== 1000;
+              if (isError && currentSession.reconnectAttempts < 3) {
+                this.logger.log(`[Session ${sessionId}] Attempting to reconnect Deepgram...`);
+                this.reconnectDeepgram(sessionId, client, currentSession.audioChunkQueue.length);
+              }
+            }
+          });
+
+          session.deepgramConnection = deepgramConnection;
+          this.logger.log(`[Session ${sessionId}] Deepgram connection created on demand, waiting for open...`);
+          
+          // Wait up to 5 seconds for connection to open
+          let attempts = 0;
+          const checkInterval = setInterval(() => {
+            attempts++;
+            if (session.deepgramConnectionOpen) {
+              clearInterval(checkInterval);
+              client.emit('deepgram-status', { ready: true, message: 'Deepgram connection is ready' });
+            } else if (attempts >= 50) { // 5 seconds
+              clearInterval(checkInterval);
+              client.emit('deepgram-status', { ready: false, message: 'Deepgram connection timeout' });
+            }
+          }, 100);
+        } catch (error: any) {
+          this.logger.error(`[Session ${sessionId}] Failed to create Deepgram connection:`, error);
+          client.emit('deepgram-status', { ready: false, message: error.message || 'Failed to create connection' });
+        }
+        return;
+      }
+
+      // Check if connection is open
+      if (session.deepgramConnectionOpen) {
+        this.logger.log(`[Session ${sessionId}] ✅ Deepgram connection is ready`);
+        client.emit('deepgram-status', { ready: true, message: 'Deepgram connection is ready' });
+      } else {
+        // Connection exists but not open yet - wait for it
+        this.logger.log(`[Session ${sessionId}] ⏳ Deepgram connection exists but not open yet, waiting...`);
+        
+        // Wait up to 5 seconds for connection to open
+        let attempts = 0;
+        const checkInterval = setInterval(() => {
+          attempts++;
+          if (session.deepgramConnectionOpen) {
+            clearInterval(checkInterval);
+            this.logger.log(`[Session ${sessionId}] ✅ Deepgram connection opened after ${attempts * 100}ms`);
+            client.emit('deepgram-status', { ready: true, message: 'Deepgram connection is ready' });
+          } else if (attempts >= 50) { // 5 seconds
+            clearInterval(checkInterval);
+            this.logger.warn(`[Session ${sessionId}] ⚠️ Deepgram connection not open after 5 seconds`);
+            client.emit('deepgram-status', { ready: false, message: 'Connection timeout' });
+          }
+        }, 100);
+      }
+    } catch (error: any) {
+      this.logger.error(`[Session ${sessionId || 'unknown'}] Error ensuring Deepgram ready:`, error);
+      client.emit('deepgram-status', { ready: false, message: error.message || 'Unknown error' });
+    }
+  }
+
   @SubscribeMessage('user-finished-speaking')
   async handleUserFinishedSpeaking(
     @ConnectedSocket() client: Socket,
@@ -478,22 +636,161 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       const session = this.sessions.get(sessionId);
       
       if (!session) {
-        this.logger.warn(`[Session ${sessionId}] User finished speaking but session not found`);
-        return;
+        this.logger.warn(`[Session ${sessionId}] User finished speaking but session not found - attempting fallback recovery...`);
+        
+        // FALLBACK: Try to recover by recreating session and transcribing accumulated audio
+        try {
+          const userId = client.data.userId;
+          if (!userId) {
+            this.logger.error(`[Session ${sessionId}] Cannot recover - userId not found`);
+            return;
+          }
+
+          // Recreate session from database
+          const interview = await this.prisma.interview.findUnique({
+            where: { id: data.interviewId },
+            include: {
+              job: true,
+              template: {
+                include: {
+                  questions: {
+                    orderBy: { order: 'asc' },
+                  },
+                },
+              },
+            },
+          });
+
+          if (!interview || !interview.template || !interview.template.questions.length) {
+            this.logger.error(`[Session ${sessionId}] Cannot recover - interview not found or invalid`);
+            return;
+          }
+
+          // Get accumulated audio chunks from temporary storage
+          const audioStorage = this.audioChunkStorage.get(data.interviewId);
+          if (!audioStorage || audioStorage.chunks.length === 0) {
+            this.logger.warn(`[Session ${sessionId}] No accumulated audio chunks found for fallback transcription`);
+            return;
+          }
+
+          this.logger.log(`[Session ${sessionId}] 🔄 FALLBACK: Transcribing ${audioStorage.chunks.length} accumulated audio chunks using Deepgram file API...`);
+
+          // Combine all audio chunks into a single buffer
+          const combinedAudio = Buffer.concat(audioStorage.chunks);
+          
+          // Use Deepgram file transcription API to transcribe the accumulated audio
+          const deepgram = (this.deepgramService as any).deepgram;
+          if (!deepgram) {
+            this.logger.error(`[Session ${sessionId}] Cannot recover - Deepgram client not available`);
+            return;
+          }
+
+          // Transcribe using Deepgram's buffer transcription
+          const { result, error } = await deepgram.listen.prerecorded.transcribeFile(
+            combinedAudio,
+            {
+              model: 'nova-2',
+              language: 'en-US', // Default to English, can be enhanced to detect language
+              smart_format: true,
+              punctuate: true,
+              mimetype: 'audio/raw', // Raw PCM audio
+              sample_rate: 16000,
+              channels: 1,
+              encoding: 'linear16',
+            },
+          );
+
+          if (error) {
+            this.logger.error(`[Session ${sessionId}] Deepgram transcription error in fallback:`, error);
+            return;
+          }
+
+          const transcript = result?.results?.channels?.[0]?.alternatives?.[0]?.transcript || '';
+          
+          if (!transcript || transcript.trim().length === 0) {
+            this.logger.warn(`[Session ${sessionId}] Fallback transcription returned empty transcript`);
+            return;
+          }
+
+          this.logger.log(`[Session ${sessionId}] ✅ FALLBACK: Successfully transcribed audio: "${transcript}"`);
+
+          // Create a temporary session for processing
+          const tempSessionId = `${data.interviewId}-${userId}`;
+          const tempSession: InterviewSession = {
+            interviewId: data.interviewId,
+            userId,
+            deepgramConnection: null,
+            deepgramConnectionOpen: false,
+            audioChunkQueue: [],
+            isReconnecting: false,
+            reconnectAttempts: 0,
+            isDisconnecting: false,
+            conversationHistory: [], // Will be loaded from database if needed
+            currentQuestionIndex: 0,
+            interviewContext: {
+              jobTitle: interview.job.title,
+              requiredSkills: interview.job.requiredSkills || [],
+              questions: interview.template.questions.map(q => ({
+                id: q.id,
+                question: q.question,
+                type: q.type,
+                order: q.order,
+              })),
+            },
+            isIntroductionComplete: false,
+            isInterviewStarted: true, // Assume interview is started
+            startedAt: new Date(),
+            pendingTranscriptBuffer: '',
+            lastTranscriptTime: 0,
+            lastFollowUpSentTime: 0,
+            followUpCount: 0,
+            lastInterimTranscript: '',
+            lastInterimTime: 0,
+            askedQuestions: [],
+            isClosingSent: false,
+            isProcessingTranscript: false,
+            lastProcessedTranscript: '',
+            isGeneratingQuestion: false,
+          };
+
+          // Store temporary session
+          this.sessions.set(tempSessionId, tempSession);
+          client.data.sessionId = tempSessionId;
+
+          // Process the transcript
+          await this.processCompleteTranscript(tempSessionId, transcript.trim(), client);
+
+          // Clean up temporary session after processing
+          setTimeout(() => {
+            this.sessions.delete(tempSessionId);
+          }, 5000);
+
+          // Clear audio storage after successful transcription
+          this.audioChunkStorage.delete(data.interviewId);
+
+          return;
+        } catch (error: any) {
+          this.logger.error(`[Session ${sessionId}] Error in fallback recovery:`, error);
+          return;
+        }
       }
       
       // User manually muted - they've finished speaking
-      // Process any pending transcript immediately (don't wait for debounce)
+      // Process ALL accumulated transcripts immediately
       if (session.pendingTranscriptBuffer && session.pendingTranscriptBuffer.trim().length > 0) {
         const completeTranscript = session.pendingTranscriptBuffer.trim();
         
-        // Clear any existing debounce timer since user explicitly finished speaking
+        // Clear any existing timers since user explicitly finished speaking
         if (session.transcriptDebounceTimer) {
           clearTimeout(session.transcriptDebounceTimer);
           session.transcriptDebounceTimer = undefined;
         }
+        if (session.interimStableTimer) {
+          clearTimeout(session.interimStableTimer);
+          session.interimStableTimer = undefined;
+        }
         
-        // Clear the buffer before processing
+        // Clear the buffer before processing (to prevent duplicate processing)
         session.pendingTranscriptBuffer = '';
         
         // Skip very short/filler transcripts
@@ -502,13 +799,13 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
           fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
         
         if (!isFiller) {
-          this.logger.log(`[Session ${sessionId}] ✅ User finished speaking - processing transcript immediately: "${completeTranscript}"`);
+          this.logger.log(`[Session ${sessionId}] ✅ User finished speaking - processing complete transcript: "${completeTranscript}"`);
           await this.processCompleteTranscript(sessionId, completeTranscript, client);
         } else {
           this.logger.log(`[Session ${sessionId}] ⏭️ User finished speaking but transcript is filler - skipping: "${completeTranscript}"`);
         }
       } else {
-        this.logger.log(`[Session ${sessionId}] User finished speaking but no pending transcript to process`);
+        this.logger.log(`[Session ${sessionId}] User finished speaking but no transcript accumulated`);
       }
     } catch (error: any) {
       this.logger.error(`[Session ${sessionId || 'unknown'}] Error handling user finished speaking:`, error);
@@ -546,10 +843,13 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
           this.logger.log(`[Session ${sessionId}] Audio chunk queued (Deepgram connection not created yet). Queue size: ${session.audioChunkQueue.length}. Interview started: ${session.isInterviewStarted}`);
         }
         
-        // Limit queue size to prevent memory issues
-        if (session.audioChunkQueue.length > 100) {
+        // Limit queue size to prevent memory issues (keep last 200 chunks - increased for better transcription)
+        // At 16kHz, 4096 samples = ~256ms per chunk, so 200 chunks = ~51 seconds of audio
+        if (session.audioChunkQueue.length > 200) {
           session.audioChunkQueue.shift(); // Remove oldest chunk
-          this.logger.warn(`[Session ${sessionId}] Audio queue limit reached, dropping oldest chunk`);
+          if (session.audioChunkQueue.length % 50 === 0) { // Log every 50th drop to avoid spam
+            this.logger.warn(`[Session ${sessionId}] Audio queue limit reached, dropping oldest chunk (queue size: ${session.audioChunkQueue.length})`);
+          }
         }
         
         return;
@@ -557,6 +857,20 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
 
       // Get audio buffer
       const audioBuffer = Buffer.from(data.audio);
+      
+      // CRITICAL: Also store audio chunks in temporary storage (keyed by interviewId) for fallback
+      // This allows us to transcribe audio even if session is lost
+      if (!this.audioChunkStorage.has(session.interviewId)) {
+        this.audioChunkStorage.set(session.interviewId, { chunks: [], lastUpdated: Date.now() });
+      }
+      const storage = this.audioChunkStorage.get(session.interviewId)!;
+      storage.chunks.push(audioBuffer);
+      storage.lastUpdated = Date.now();
+      
+      // Limit storage size (keep last 300 chunks = ~77 seconds of audio for fallback)
+      if (storage.chunks.length > 300) {
+        storage.chunks.shift(); // Remove oldest chunk
+      }
       
       // If connection is not open or we're reconnecting, queue the chunk
       if (!session.deepgramConnectionOpen || session.isReconnecting) {
@@ -569,10 +883,13 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
           this.logger.debug(`[Session ${sessionId}] Audio chunk queued (${reason}). Queue size: ${session.audioChunkQueue.length}`);
         }
         
-        // Limit queue size to prevent memory issues (keep last 100 chunks)
-        if (session.audioChunkQueue.length > 100) {
+        // Limit queue size to prevent memory issues (keep last 200 chunks - increased for better transcription)
+        // At 16kHz, 4096 samples = ~256ms per chunk, so 200 chunks = ~51 seconds of audio
+        if (session.audioChunkQueue.length > 200) {
           session.audioChunkQueue.shift(); // Remove oldest chunk
-          this.logger.warn(`[Session ${sessionId}] Audio queue limit reached, dropping oldest chunk`);
+          if (session.audioChunkQueue.length % 50 === 0) { // Log every 50th drop to avoid spam
+            this.logger.warn(`[Session ${sessionId}] Audio queue limit reached, dropping oldest chunk (queue size: ${session.audioChunkQueue.length})`);
+          }
         }
         
         return;
@@ -647,12 +964,50 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
             // Notify frontend
             client.emit('deepgram-ready', { message: 'Deepgram connection restored' });
             
+            // Restart keepalive for reconnected connection
+            if (session.keepaliveInterval) {
+              clearInterval(session.keepaliveInterval);
+            }
+            
+            const keepaliveInterval = setInterval(() => {
+              const currentSession = this.sessions.get(sessionId);
+              if (!currentSession || !currentSession.deepgramConnection || currentSession.isDisconnecting) {
+                clearInterval(keepaliveInterval);
+                return;
+              }
+              
+              if (currentSession.deepgramConnection.getReadyState() !== 1) {
+                clearInterval(keepaliveInterval);
+                currentSession.keepaliveInterval = undefined;
+                return;
+              }
+              
+              const silenceDuration = 0.01;
+              const sampleRate = 16000;
+              const samples = Math.floor(sampleRate * silenceDuration);
+              const silenceBuffer = Buffer.alloc(samples * 2);
+              silenceBuffer.fill(0);
+              
+              try {
+                this.deepgramService.sendAudio(currentSession.deepgramConnection, silenceBuffer, true);
+              } catch (error) {
+                this.logger.error(`[Session ${sessionId}] Error sending keepalive:`, error);
+                clearInterval(keepaliveInterval);
+                currentSession.keepaliveInterval = undefined;
+              }
+            }, 5000);
+            
+            session.keepaliveInterval = keepaliveInterval;
+            this.logger.log(`[Session ${sessionId}] ✅ Keepalive restarted after reconnection`);
+            
             // Flush any queued chunks
             if (session.audioChunkQueue.length > 0) {
               this.logger.log(`[Session ${sessionId}] Flushing ${session.audioChunkQueue.length} queued chunks after reconnection...`);
               const queue = [...session.audioChunkQueue];
               session.audioChunkQueue = [];
               
+              // Send queued chunks faster (50ms delay instead of 250ms) to catch up
+              // This prevents the queue from growing too large during reconnection
               queue.forEach((chunk, index) => {
                 setTimeout(() => {
                   try {
@@ -660,7 +1015,7 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
                   } catch (error) {
                     this.logger.error(`[Session ${sessionId}] Error sending queued chunk after reconnect:`, error);
                   }
-                }, index * 250);
+                }, index * 50); // Reduced from 250ms to 50ms for faster processing
               });
             }
           },
@@ -727,153 +1082,58 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
       speaker: 'candidate',
     });
 
-    // Handle interim transcripts - DO NOT process them as final automatically
-    // Only use them for display purposes. Wait for final transcripts or user mute signal.
-    if (!isFinal && text.trim().length > 0) {
-      // Just track interim transcripts for display, but don't process them
-      // This prevents premature processing when user pauses while speaking
-      session.lastInterimTranscript = text.trim();
-      session.lastInterimTime = Date.now();
-      
-      // Clear any interim stable timer - we don't want to auto-process interim transcripts
-      if (session.interimStableTimer) {
-        clearTimeout(session.interimStableTimer);
-        session.interimStableTimer = undefined;
-      }
-    } else if (isFinal) {
-      // Clear interim tracking when we get a final transcript
-      session.lastInterimTranscript = '';
-      session.lastInterimTime = 0;
-      if (session.interimStableTimer) {
-        clearTimeout(session.interimStableTimer);
-        session.interimStableTimer = undefined;
-      }
-    }
-
-    // Process final transcripts for AI response with debouncing
-    if (isFinal && text.trim().length > 0) {
-      // Clear any existing debounce timer
-      if (session.transcriptDebounceTimer) {
-        this.logger.log(`[Session ${sessionId}] 🧹 Clearing existing debounce timer before setting new one`);
-        clearTimeout(session.transcriptDebounceTimer);
-        session.transcriptDebounceTimer = undefined;
-      }
-
-      // Accumulate final transcripts (add space if buffer already has content)
-      if (session.pendingTranscriptBuffer) {
-        session.pendingTranscriptBuffer += ' ' + text.trim();
-      } else {
-        session.pendingTranscriptBuffer = text.trim();
-      }
-      
-      session.lastTranscriptTime = Date.now();
-      this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript buffer: "${session.pendingTranscriptBuffer}"`);
-
-      // Set debounce timer: wait 8 seconds after last final transcript before processing
-      // This allows user to finish their complete thought and ensures we capture all transcripts
-      // Increased from 6 to 8 seconds to prevent premature processing when user is still speaking
-      const DEBOUNCE_DELAY = 8000; // 8 seconds - longer delay to accumulate complete response
-      
-      // Store the buffer content at the time the timer is set (to detect if it changed)
-      const bufferSnapshot = session.pendingTranscriptBuffer;
-      const bufferSnapshotTime = Date.now();
-      
-      session.transcriptDebounceTimer = setTimeout(async () => {
-        // Check if session still exists and hasn't been cleared
-        const currentSession = this.sessions.get(sessionId);
-        if (!currentSession || currentSession.isDisconnecting) {
-          return;
-        }
-
-        // Check if buffer was already cleared (another timer might have processed it)
-        if (!currentSession.pendingTranscriptBuffer || currentSession.pendingTranscriptBuffer.trim().length === 0) {
-          this.logger.log(`[Session ${sessionId}] ⏭️ Buffer already cleared, skipping duplicate timer`);
-          currentSession.transcriptDebounceTimer = undefined;
-          return;
-        }
-
-        // Check if buffer content changed (new transcripts came in after timer was set)
-        // If buffer changed significantly, this timer is for old content - skip it
-        const currentBuffer = currentSession.pendingTranscriptBuffer.trim();
-        const snapshotBuffer = bufferSnapshot.trim();
-        if (currentBuffer !== snapshotBuffer && currentBuffer.length > snapshotBuffer.length) {
-          // Buffer has new content, let a newer timer handle it
-          this.logger.log(`[Session ${sessionId}] ⏭️ Buffer updated since timer was set, skipping old timer`);
-          return;
-        }
-
-        // Check if enough time has passed since last transcript (prevent race conditions)
-        const timeSinceLastTranscript = Date.now() - currentSession.lastTranscriptTime;
-        if (timeSinceLastTranscript < DEBOUNCE_DELAY - 100) {
-          // Too soon, reset timer
-          this.logger.log(`[Session ${sessionId}] ⏳ Transcript received too recently, extending debounce`);
-          return;
-        }
-
-        const completeTranscript = currentSession.pendingTranscriptBuffer.trim();
-        if (completeTranscript.length === 0) {
-          return;
-        }
-
-        // Skip very short transcripts that are likely incomplete (less than 10 characters)
-        // Also skip common filler words/phrases
-        const fillerPhrases = ['okay', 'ok', 'yes', 'no', 'uh', 'um', 'ah', 'sorry', 'thank you', 'thanks'];
-        const isFiller = completeTranscript.length < 10 || 
-          fillerPhrases.some(phrase => completeTranscript.toLowerCase().trim() === phrase.toLowerCase().trim());
-        
-        if (isFiller) {
-          this.logger.log(`[Session ${sessionId}] ⏭️ Skipping short/filler transcript: "${completeTranscript}"`);
-          currentSession.pendingTranscriptBuffer = '';
-          currentSession.transcriptDebounceTimer = undefined;
-          return;
-        }
-
-        // Check if we're already processing a transcript (prevent concurrent processing)
-        if (currentSession.isProcessingTranscript) {
-          this.logger.warn(`[Session ${sessionId}] ⚠️ Already processing a transcript, skipping duplicate: "${completeTranscript}"`);
-          // Don't clear buffer - let it be processed later
-          return;
-        }
-        
-        // Check if this transcript was already processed (prevent duplicate processing)
-        // Use a more lenient comparison (normalize whitespace and case)
-        const normalizedTranscript = completeTranscript.trim().toLowerCase().replace(/\s+/g, ' ');
-        const normalizedLastProcessed = currentSession.lastProcessedTranscript.trim().toLowerCase().replace(/\s+/g, ' ');
-        
-        if (normalizedLastProcessed && normalizedTranscript === normalizedLastProcessed) {
-          this.logger.warn(`[Session ${sessionId}] ⚠️ Transcript already processed, skipping duplicate: "${completeTranscript}"`);
-          currentSession.pendingTranscriptBuffer = '';
-          currentSession.transcriptDebounceTimer = undefined;
-          return;
-        }
-        
-        // Check if this transcript is very similar to the last processed one (fuzzy match)
-        // This handles cases where Deepgram sends slightly different versions of the same transcript
-        if (normalizedLastProcessed && normalizedTranscript.length > 20) {
-          // Calculate similarity (simple Levenshtein-like check)
-          const similarity = this.calculateSimilarity(normalizedTranscript, normalizedLastProcessed);
-          if (similarity > 0.9) { // 90% similar
-            this.logger.warn(`[Session ${sessionId}] ⚠️ Transcript too similar to last processed (${(similarity * 100).toFixed(1)}%), skipping: "${completeTranscript}"`);
-            currentSession.pendingTranscriptBuffer = '';
-            currentSession.transcriptDebounceTimer = undefined;
-            return;
+    // SIMPLIFIED: Accumulate ALL transcripts (both interim and final) while user is speaking
+    // We'll only process them when user mutes the mic (user-finished-speaking event)
+    if (text.trim().length > 0) {
+      // Use final transcripts when available, otherwise use interim
+      // If we have a final transcript, it replaces any interim for that segment
+      if (isFinal) {
+        // For final transcripts, add to buffer (replace any interim version)
+        if (session.pendingTranscriptBuffer) {
+          // Check if this final transcript is similar to the last part of buffer
+          // If so, replace it; otherwise append
+          const lastWords = session.pendingTranscriptBuffer.split(' ').slice(-5).join(' ').toLowerCase();
+          const currentWords = text.trim().toLowerCase();
+          
+          // If current transcript starts with similar words to last part of buffer, replace
+          if (lastWords && currentWords.startsWith(lastWords.substring(0, Math.min(20, lastWords.length)))) {
+            // Replace the last part with final version
+            const words = session.pendingTranscriptBuffer.split(' ');
+            words.splice(-5); // Remove last 5 words
+            session.pendingTranscriptBuffer = words.join(' ') + ' ' + text.trim();
+          } else {
+            // Append new final transcript
+            session.pendingTranscriptBuffer += ' ' + text.trim();
           }
+        } else {
+          session.pendingTranscriptBuffer = text.trim();
         }
-
-        // Clear the buffer and timer BEFORE processing (to prevent re-processing)
-        currentSession.pendingTranscriptBuffer = '';
-        currentSession.transcriptDebounceTimer = undefined;
-        
-        this.logger.log(`[Session ${sessionId}] ✅ Processing complete transcript after debounce: "${completeTranscript}"`);
-        this.logger.log(`[Session ${sessionId}] Introduction complete: ${currentSession.isIntroductionComplete}, Question index: ${currentSession.currentQuestionIndex}`);
-        this.logger.log(`[Session ${sessionId}] 🔒 Processing lock status: ${currentSession.isProcessingTranscript}, Generating question: ${currentSession.isGeneratingQuestion}`);
-        
-        // Process the accumulated transcript
-        await this.processCompleteTranscript(sessionId, completeTranscript, client);
-        
-        this.logger.log(`[Session ${sessionId}] ✅ Finished processing transcript`);
-      }, DEBOUNCE_DELAY);
+      } else {
+        // For interim transcripts, append or update the last part
+        // Remove any previous interim and add the new one
+        if (session.pendingTranscriptBuffer) {
+          // Check if buffer ends with an interim transcript (no period/exclamation/question mark at end)
+          const lastChar = session.pendingTranscriptBuffer.trim().slice(-1);
+          if (!['.', '!', '?'].includes(lastChar)) {
+            // Likely an interim, replace last part
+            const words = session.pendingTranscriptBuffer.split(' ');
+            // Remove last few words that might be interim
+            words.splice(-3);
+            session.pendingTranscriptBuffer = words.join(' ') + ' ' + text.trim();
+          } else {
+            // Buffer ends with final transcript, append interim
+            session.pendingTranscriptBuffer += ' ' + text.trim();
+          }
+        } else {
+          session.pendingTranscriptBuffer = text.trim();
+        }
+      }
+      
+      this.logger.log(`[Session ${sessionId}] 📦 Accumulated transcript: "${session.pendingTranscriptBuffer}"`);
     }
+    
+    // DO NOT process transcripts automatically - wait for user to mute mic
+    // The user-finished-speaking event will trigger processing
   }
 
   /**
@@ -1382,6 +1642,12 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
           session.transcriptDebounceTimer = undefined;
         }
         
+        // Clear duration check timer if exists
+        if (session.durationCheckTimer) {
+          clearTimeout(session.durationCheckTimer);
+          session.durationCheckTimer = undefined;
+        }
+        
         // Close Deepgram connection
         if (session.deepgramConnection) {
           this.deepgramService.closeConnection(session.deepgramConnection);
@@ -1445,6 +1711,192 @@ export class LiveInterviewGateway implements OnGatewayConnection, OnGatewayDisco
     } catch (error: any) {
       this.logger.error('Error ending interview:', error);
       client.emit('error', { message: error.message || 'Failed to end interview' });
+    }
+  }
+
+  /**
+   * Start a timer that periodically checks if 5 minutes have passed
+   * and gracefully ends the interview if so
+   */
+  private startDurationCheckTimer(sessionId: string, client: Socket): void {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    // Check every 10 seconds if 5 minutes have passed
+    const checkInterval = 10000; // 10 seconds
+    const MAX_DURATION_MS = 5 * 60 * 1000; // 5 minutes
+
+    const checkDuration = () => {
+      const currentSession = this.sessions.get(sessionId);
+      if (!currentSession || !currentSession.isInterviewStarted || currentSession.isDisconnecting) {
+        // Session ended or is disconnecting, stop checking
+        if (currentSession?.durationCheckTimer) {
+          clearTimeout(currentSession.durationCheckTimer);
+          currentSession.durationCheckTimer = undefined;
+        }
+        return;
+      }
+
+      const elapsedTime = Date.now() - currentSession.startedAt.getTime();
+      const elapsedMinutes = elapsedTime / (60 * 1000);
+
+      // If 5 minutes have passed, gracefully end the interview
+      if (elapsedTime >= MAX_DURATION_MS) {
+        this.logger.log(
+          `[Session ${sessionId}] ⏰ 5 minutes elapsed (${elapsedMinutes.toFixed(1)} minutes). ` +
+          `Gracefully ending interview...`
+        );
+
+        // Clear the timer
+        if (currentSession.durationCheckTimer) {
+          clearTimeout(currentSession.durationCheckTimer);
+          currentSession.durationCheckTimer = undefined;
+        }
+
+        // Check if closing message was already sent
+        if (currentSession.isClosingSent) {
+          this.logger.log(`[Session ${sessionId}] Closing already sent, just ending interview...`);
+          // End interview immediately
+          this.endInterviewGracefully(sessionId, client);
+          return;
+        }
+
+        // Send closing message and end gracefully
+        this.endInterviewAt5Minutes(sessionId, client);
+      } else {
+        // Schedule next check
+        currentSession.durationCheckTimer = setTimeout(checkDuration, checkInterval);
+      }
+    };
+
+    // Start checking after a short delay (wait for interview to be fully started)
+    session.durationCheckTimer = setTimeout(checkDuration, checkInterval);
+    this.logger.log(`[Session ${sessionId}] ⏱️ Duration check timer started (will check every 10 seconds for 5-minute limit)`);
+  }
+
+  /**
+   * End interview gracefully when 5 minutes are reached
+   */
+  private async endInterviewAt5Minutes(sessionId: string, client: Socket): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.isClosingSent) {
+      return;
+    }
+
+    session.isClosingSent = true;
+
+    try {
+      // Generate and send closing message
+      const closing = await this.geminiService.generateClosing();
+
+      session.conversationHistory.push({
+        role: 'assistant',
+        content: closing,
+        timestamp: new Date(),
+      });
+
+      const closingTimestamp = new Date().toISOString();
+      this.logger.log(`[Session ${sessionId}] 🤖 AI CLOSING (5-minute limit) [${closingTimestamp}]: "${closing}"`);
+
+      client.emit('ai-message', {
+        message: closing,
+        type: 'closing',
+      });
+
+      // Wait for AI to finish speaking before ending (same as normal flow)
+      setTimeout(async () => {
+        await this.endInterviewGracefully(sessionId, client);
+      }, 10000); // 10 seconds to allow speech to complete
+    } catch (error: any) {
+      this.logger.error(`[Session ${sessionId}] Error ending interview at 5 minutes:`, error);
+      // Still end the interview even if closing message fails
+      await this.endInterviewGracefully(sessionId, client);
+    }
+  }
+
+  /**
+   * Gracefully end the interview (save data, cleanup, notify client)
+   */
+  private async endInterviewGracefully(sessionId: string, client: Socket): Promise<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return;
+    }
+
+    // Mark as disconnecting
+    session.isDisconnecting = true;
+    session.isReconnecting = false;
+
+    // Clear all timers
+    if (session.transcriptDebounceTimer) {
+      clearTimeout(session.transcriptDebounceTimer);
+      session.transcriptDebounceTimer = undefined;
+    }
+    if (session.interimStableTimer) {
+      clearTimeout(session.interimStableTimer);
+      session.interimStableTimer = undefined;
+    }
+    if (session.durationCheckTimer) {
+      clearTimeout(session.durationCheckTimer);
+      session.durationCheckTimer = undefined;
+    }
+
+    // Close Deepgram connection
+    if (session.deepgramConnection) {
+      this.deepgramService.closeConnection(session.deepgramConnection);
+    }
+
+    // Save conversation history to database
+    if (session.conversationHistory && session.conversationHistory.length > 0) {
+      try {
+        const userMessages = session.conversationHistory
+          .filter(msg => msg.role === 'user')
+          .map(msg => msg.content);
+        const transcriptText = userMessages.join(' ');
+
+        const transcriptWithTimestamps = session.conversationHistory
+          .filter(msg => msg.role === 'user')
+          .map(msg => ({
+            text: msg.content,
+            timestamp: msg.timestamp.getTime(),
+          }));
+
+        const formattedConversationHistory = session.conversationHistory.map(msg => ({
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp.toISOString(),
+        }));
+
+        this.logger.log(`[Session ${sessionId}] Saving conversation history to database (${session.conversationHistory.length} messages)`);
+
+        await this.prisma.interview.update({
+          where: { id: session.interviewId },
+          data: {
+            status: InterviewStatus.awaiting_review,
+            completedAt: new Date(),
+            transcript: transcriptText,
+            transcriptWithTimestamps: transcriptWithTimestamps as any,
+            conversationHistory: formattedConversationHistory as any,
+          },
+        });
+
+        this.logger.log(`[Session ${sessionId}] ✅ Conversation history saved to database`);
+      } catch (error: any) {
+        this.logger.error(`[Session ${sessionId}] ❌ Failed to save conversation history:`, error);
+      }
+    }
+
+    // Cleanup session
+    this.sessions.delete(sessionId);
+    this.logger.log(`[Session ${sessionId}] ✅ Interview ended gracefully (5-minute limit reached)`);
+
+    // Notify client
+    if (client.connected) {
+      client.emit('interview-ended', {
+        message: 'Interview ended automatically after 5 minutes',
+      });
     }
   }
 }
