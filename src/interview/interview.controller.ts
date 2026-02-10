@@ -21,6 +21,8 @@ import { TTSService } from './services/tts.service';
 import { InterviewTempStorageService } from './services/interview-temp-storage.service';
 import { CreateInterviewDto } from './dto/update-create-interview.dto';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PrismaService } from '../prisma/prisma.service';
+import { VideoProcessingStatus } from '@prisma/client';
 import * as path from 'path';
 import * as fs from 'fs';
 import { exec } from 'child_process';
@@ -37,6 +39,7 @@ export class InterviewController {
     private videoProcessingService: VideoProcessingService,
     private ttsService: TTSService,
     private tempStorageService: InterviewTempStorageService,
+    private prisma: PrismaService,
   ) {}
 
   @Post()
@@ -230,13 +233,75 @@ export class InterviewController {
     @Param('id') id: string,
     @Request() req,
   ) {
-    // Concatenate video chunks and mix AI audio, then upload final video
-    const result = await this.videoProcessingService.processVideoChunksWithAudio(id);
+    // Update interview status to processing
+    await this.prisma.interview.update({
+      where: { id },
+      data: {
+        videoProcessingStatus: VideoProcessingStatus.processing,
+        videoProcessingStartedAt: new Date(),
+      },
+    });
 
+    // Process video in background (fire-and-forget)
+    this.videoProcessingService
+      .processVideoChunksWithAudio(id)
+      .then(async (result) => {
+        // Update interview with completed status and video URL
+        await this.prisma.interview.update({
+          where: { id },
+          data: {
+            videoProcessingStatus: VideoProcessingStatus.completed,
+            videoProcessingCompletedAt: new Date(),
+            videoUrl: result.url,
+          },
+        });
+      })
+      .catch(async (error) => {
+        // Update interview with failed status and error message
+        await this.prisma.interview.update({
+          where: { id },
+          data: {
+            videoProcessingStatus: VideoProcessingStatus.failed,
+            videoProcessingCompletedAt: new Date(),
+            videoProcessingError: error.message || 'Video processing failed',
+          },
+        });
+      });
+
+    // Return immediately
     return {
       success: true,
-      key: result.key,
-      url: result.url,
+      message: 'Video processing started',
+      status: 'processing',
+    };
+  }
+
+  @Get(':id/video-status')
+  async getVideoStatus(
+    @Param('id') id: string,
+    @Request() req,
+  ) {
+    const interview = await this.prisma.interview.findUnique({
+      where: { id },
+      select: {
+        videoProcessingStatus: true,
+        videoProcessingStartedAt: true,
+        videoProcessingCompletedAt: true,
+        videoProcessingError: true,
+        videoUrl: true,
+      },
+    });
+
+    if (!interview) {
+      throw new Error('Interview not found');
+    }
+
+    return {
+      status: interview.videoProcessingStatus || VideoProcessingStatus.pending,
+      startedAt: interview.videoProcessingStartedAt,
+      completedAt: interview.videoProcessingCompletedAt,
+      error: interview.videoProcessingError,
+      videoUrl: interview.videoUrl,
     };
   }
 
