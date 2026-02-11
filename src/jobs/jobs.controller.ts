@@ -26,6 +26,15 @@ export class JobsController {
     return this.jobsService.createJob(createJobDto, req.user.id);
   }
 
+  @Post('from-role-spec/:roleSpecId')
+  async createJobFromRoleSpec(
+    @Param('roleSpecId') roleSpecId: string,
+    @Request() req,
+    @Body() overrides?: Partial<CreateJobDto>,
+  ) {
+    return this.jobsService.createJobFromRoleSpec(roleSpecId, req.user.id, overrides);
+  }
+
   @Get()
   async getJobs(@Request() req, @Query() query: JobQueryDto) {
     return this.jobsService.getJobsByClient(req.user.id, query);
@@ -58,5 +67,21 @@ export class JobsController {
     @Body() body: { language?: string; type?: string; templateId?: string; daysAhead?: number[]; maxCandidates?: number },
   ) {
     return this.jobsService.autoInviteCandidates(id, req.user.id, body);
+  }
+
+  @Post(':id/invite-by-email')
+  async inviteByEmail(
+    @Param('id') id: string,
+    @Request() req,
+    @Body() body: {
+      email: string;
+      firstName?: string;
+      lastName?: string;
+      externalMeetingUrl?: string;
+      language?: string;
+      type?: string;
+    },
+  ) {
+    return this.jobsService.inviteByEmail(id, req.user.id, body);
   }
 }

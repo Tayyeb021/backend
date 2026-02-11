@@ -5,6 +5,8 @@ import {
   IsOptional,
   IsArray,
   IsEnum,
+  IsEmail,
+  Matches,
 } from 'class-validator';
 import { CandidateStatus } from '@prisma/client';
 
@@ -19,10 +21,14 @@ export class CreateCandidateDto {
 
   @IsString()
   @IsNotEmpty()
+  @IsEmail()
   email: string;
 
   @IsString()
   @IsOptional()
+  @Matches(/^\+?[1-9]\d{1,14}$/, {
+    message: 'Phone number must be in international format (e.g., +971501234567)',
+  })
   phone?: string;
 
   @IsUUID()

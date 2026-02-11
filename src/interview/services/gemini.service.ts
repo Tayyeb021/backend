@@ -4,6 +4,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 @Injectable()
 export class GeminiService {
   private genAI: GoogleGenerativeAI;
+  private readonly model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY || '';
@@ -14,7 +15,7 @@ export class GeminiService {
     jobDescription: string,
     language: string = 'en',
   ): Promise<string[]> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: this.model });
 
     const prompt = `Generate 5 interview questions for the following job description. 
     Questions should be in ${language} language and cover technical skills, experience, and cultural fit.
@@ -55,7 +56,7 @@ export class GeminiService {
     strengths: string[];
     weaknesses: string[];
   }> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: this.model });
 
     const prompt = `Evaluate the candidate's answer to an interview question.
     
@@ -100,7 +101,7 @@ export class GeminiService {
     scores: any,
     language: string = 'en',
   ): Promise<string> {
-    const model = this.genAI.getGenerativeModel({ model: 'gemini-pro' });
+    const model = this.genAI.getGenerativeModel({ model: this.model });
 
     const prompt = `Generate a professional interview summary in ${language} language.
     

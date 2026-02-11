@@ -698,6 +698,197 @@ async function main() {
   console.log(`✅ Candidates: ${createdCount} created, ${skippedCount} skipped (Total: ${createdCandidates.length})`);
   console.log(`✅ Interview Templates: ${createdTemplates.length} (with ${createdTemplates.reduce((sum, t) => sum + t.questions.length, 0)} total questions)`);
   console.log(`✅ Interviews: ${interviewCreatedCount} created, ${interviewSkippedCount} skipped`);
+
+  // ============================================
+  // SKILL TAXONOMY SEEDING
+  // ============================================
+  console.log('\n📚 Seeding Skill Taxonomy...');
+  
+  const skillTaxonomyData = [
+    // Programming Languages
+    { preferredLabel: 'javascript', aliases: ['js', 'ecmascript'], category: 'Programming Languages', description: 'High-level programming language for web development' },
+    { preferredLabel: 'typescript', aliases: ['ts'], category: 'Programming Languages', description: 'Typed superset of JavaScript' },
+    { preferredLabel: 'python', aliases: ['py'], category: 'Programming Languages', description: 'High-level interpreted programming language' },
+    { preferredLabel: 'java', aliases: [], category: 'Programming Languages', description: 'Object-oriented programming language' },
+    { preferredLabel: 'csharp', aliases: ['c#', 'c sharp'], category: 'Programming Languages', description: 'Microsoft programming language' },
+    { preferredLabel: 'cpp', aliases: ['c++', 'c plus plus'], category: 'Programming Languages', description: 'General-purpose programming language' },
+    { preferredLabel: 'go', aliases: ['golang'], category: 'Programming Languages', description: 'Google programming language' },
+    { preferredLabel: 'rust', aliases: [], category: 'Programming Languages', description: 'Systems programming language' },
+    { preferredLabel: 'php', aliases: [], category: 'Programming Languages', description: 'Server-side scripting language' },
+    { preferredLabel: 'ruby', aliases: [], category: 'Programming Languages', description: 'Dynamic programming language' },
+    { preferredLabel: 'swift', aliases: [], category: 'Programming Languages', description: 'Apple programming language' },
+    { preferredLabel: 'kotlin', aliases: [], category: 'Programming Languages', description: 'JVM programming language' },
+    { preferredLabel: 'scala', aliases: [], category: 'Programming Languages', description: 'Functional programming on JVM' },
+    { preferredLabel: 'r', aliases: [], category: 'Programming Languages', description: 'Statistical computing language' },
+    { preferredLabel: 'matlab', aliases: [], category: 'Programming Languages', description: 'Numerical computing environment' },
+    
+    // Frontend Frameworks
+    { preferredLabel: 'react', aliases: ['reactjs', 'react.js'], category: 'Frontend Frameworks', description: 'JavaScript library for building user interfaces' },
+    { preferredLabel: 'vue', aliases: ['vuejs', 'vue.js'], category: 'Frontend Frameworks', description: 'Progressive JavaScript framework' },
+    { preferredLabel: 'angular', aliases: ['angularjs', 'angular.js'], category: 'Frontend Frameworks', description: 'TypeScript-based web framework' },
+    { preferredLabel: 'nextjs', aliases: ['next.js', 'next'], category: 'Frontend Frameworks', description: 'React framework for production' },
+    { preferredLabel: 'nuxtjs', aliases: ['nuxt.js', 'nuxt'], category: 'Frontend Frameworks', description: 'Vue.js framework' },
+    { preferredLabel: 'svelte', aliases: [], category: 'Frontend Frameworks', description: 'Component framework' },
+    { preferredLabel: 'ember', aliases: ['emberjs', 'ember.js'], category: 'Frontend Frameworks', description: 'JavaScript framework' },
+    
+    // Backend Frameworks
+    { preferredLabel: 'nodejs', aliases: ['node.js', 'node'], category: 'Backend Frameworks', description: 'JavaScript runtime for server-side' },
+    { preferredLabel: 'express', aliases: ['expressjs', 'express.js'], category: 'Backend Frameworks', description: 'Node.js web framework' },
+    { preferredLabel: 'nestjs', aliases: ['nest.js', 'nest'], category: 'Backend Frameworks', description: 'Node.js framework for scalable applications' },
+    { preferredLabel: 'django', aliases: [], category: 'Backend Frameworks', description: 'Python web framework' },
+    { preferredLabel: 'flask', aliases: [], category: 'Backend Frameworks', description: 'Python micro web framework' },
+    { preferredLabel: 'fastapi', aliases: ['fast api'], category: 'Backend Frameworks', description: 'Modern Python web framework' },
+    { preferredLabel: 'spring', aliases: ['spring framework', 'spring boot'], category: 'Backend Frameworks', description: 'Java application framework' },
+    { preferredLabel: 'laravel', aliases: [], category: 'Backend Frameworks', description: 'PHP web framework' },
+    { preferredLabel: 'rails', aliases: ['ruby on rails', 'ror'], category: 'Backend Frameworks', description: 'Ruby web framework' },
+    { preferredLabel: 'aspnet', aliases: ['asp.net', 'asp net'], category: 'Backend Frameworks', description: 'Microsoft web framework' },
+    { preferredLabel: 'gin', aliases: ['gin framework'], category: 'Backend Frameworks', description: 'Go web framework' },
+    
+    // Databases
+    { preferredLabel: 'postgresql', aliases: ['postgres', 'pg'], category: 'Databases', description: 'Open-source relational database' },
+    { preferredLabel: 'mysql', aliases: [], category: 'Databases', description: 'Relational database management system' },
+    { preferredLabel: 'mongodb', aliases: ['mongo'], category: 'Databases', description: 'NoSQL document database' },
+    { preferredLabel: 'redis', aliases: [], category: 'Databases', description: 'In-memory data structure store' },
+    { preferredLabel: 'elasticsearch', aliases: ['elastic search', 'es'], category: 'Databases', description: 'Search and analytics engine' },
+    { preferredLabel: 'cassandra', aliases: [], category: 'Databases', description: 'Distributed NoSQL database' },
+    { preferredLabel: 'dynamodb', aliases: ['dynamo db', 'dynamo'], category: 'Databases', description: 'AWS NoSQL database' },
+    { preferredLabel: 'oracle', aliases: ['oracle db'], category: 'Databases', description: 'Enterprise relational database' },
+    { preferredLabel: 'sql server', aliases: ['mssql', 'sqlserver'], category: 'Databases', description: 'Microsoft SQL database' },
+    { preferredLabel: 'sqlite', aliases: ['sqlite3'], category: 'Databases', description: 'Lightweight SQL database' },
+    { preferredLabel: 'neo4j', aliases: [], category: 'Databases', description: 'Graph database' },
+    
+    // Cloud Platforms
+    { preferredLabel: 'aws', aliases: ['amazon web services'], category: 'Cloud Platforms', description: 'Amazon cloud computing platform' },
+    { preferredLabel: 'azure', aliases: ['microsoft azure'], category: 'Cloud Platforms', description: 'Microsoft cloud platform' },
+    { preferredLabel: 'gcp', aliases: ['google cloud platform', 'google cloud'], category: 'Cloud Platforms', description: 'Google cloud platform' },
+    { preferredLabel: 'kubernetes', aliases: ['k8s'], category: 'Cloud Platforms', description: 'Container orchestration platform' },
+    { preferredLabel: 'docker', aliases: [], category: 'Cloud Platforms', description: 'Containerization platform' },
+    { preferredLabel: 'terraform', aliases: [], category: 'Cloud Platforms', description: 'Infrastructure as code tool' },
+    { preferredLabel: 'cloudformation', aliases: ['aws cloudformation'], category: 'Cloud Platforms', description: 'AWS infrastructure as code' },
+    
+    // DevOps Tools
+    { preferredLabel: 'jenkins', aliases: [], category: 'DevOps Tools', description: 'Automation server' },
+    { preferredLabel: 'gitlab ci', aliases: ['gitlab cicd'], category: 'DevOps Tools', description: 'GitLab continuous integration' },
+    { preferredLabel: 'github actions', aliases: ['gh actions'], category: 'DevOps Tools', description: 'GitHub CI/CD platform' },
+    { preferredLabel: 'circleci', aliases: ['circle ci'], category: 'DevOps Tools', description: 'CI/CD platform' },
+    { preferredLabel: 'ansible', aliases: [], category: 'DevOps Tools', description: 'Configuration management tool' },
+    { preferredLabel: 'puppet', aliases: [], category: 'DevOps Tools', description: 'Configuration management' },
+    { preferredLabel: 'chef', aliases: [], category: 'DevOps Tools', description: 'Configuration management' },
+    { preferredLabel: 'prometheus', aliases: [], category: 'DevOps Tools', description: 'Monitoring and alerting' },
+    { preferredLabel: 'grafana', aliases: [], category: 'DevOps Tools', description: 'Analytics and monitoring' },
+    { preferredLabel: 'splunk', aliases: [], category: 'DevOps Tools', description: 'Log analysis platform' },
+    
+    // Mobile Development
+    { preferredLabel: 'react native', aliases: ['reactnative'], category: 'Mobile Development', description: 'Cross-platform mobile framework' },
+    { preferredLabel: 'flutter', aliases: [], category: 'Mobile Development', description: 'Google mobile UI framework' },
+    { preferredLabel: 'ios development', aliases: ['ios', 'swift ios'], category: 'Mobile Development', description: 'Apple iOS app development' },
+    { preferredLabel: 'android development', aliases: ['android', 'android studio'], category: 'Mobile Development', description: 'Google Android app development' },
+    { preferredLabel: 'xamarin', aliases: [], category: 'Mobile Development', description: 'Microsoft mobile framework' },
+    { preferredLabel: 'ionic', aliases: [], category: 'Mobile Development', description: 'Hybrid mobile framework' },
+    
+    // Testing
+    { preferredLabel: 'jest', aliases: [], category: 'Testing', description: 'JavaScript testing framework' },
+    { preferredLabel: 'cypress', aliases: [], category: 'Testing', description: 'End-to-end testing framework' },
+    { preferredLabel: 'selenium', aliases: [], category: 'Testing', description: 'Web automation framework' },
+    { preferredLabel: 'pytest', aliases: ['py test'], category: 'Testing', description: 'Python testing framework' },
+    { preferredLabel: 'junit', aliases: [], category: 'Testing', description: 'Java unit testing framework' },
+    { preferredLabel: 'mocha', aliases: [], category: 'Testing', description: 'JavaScript test framework' },
+    { preferredLabel: 'karma', aliases: [], category: 'Testing', description: 'Test runner for JavaScript' },
+    { preferredLabel: 'playwright', aliases: [], category: 'Testing', description: 'End-to-end testing framework' },
+    { preferredLabel: 'testng', aliases: ['test ng'], category: 'Testing', description: 'Java testing framework' },
+    
+    // Version Control
+    { preferredLabel: 'git', aliases: [], category: 'Version Control', description: 'Distributed version control system' },
+    { preferredLabel: 'svn', aliases: ['subversion'], category: 'Version Control', description: 'Version control system' },
+    { preferredLabel: 'mercurial', aliases: ['hg'], category: 'Version Control', description: 'Distributed version control' },
+    
+    // Web Technologies
+    { preferredLabel: 'html', aliases: ['html5'], category: 'Web Technologies', description: 'HyperText Markup Language' },
+    { preferredLabel: 'css', aliases: ['css3'], category: 'Web Technologies', description: 'Cascading Style Sheets' },
+    { preferredLabel: 'sass', aliases: ['scss'], category: 'Web Technologies', description: 'CSS preprocessor' },
+    { preferredLabel: 'less', aliases: [], category: 'Web Technologies', description: 'CSS preprocessor' },
+    { preferredLabel: 'webpack', aliases: [], category: 'Web Technologies', description: 'Module bundler' },
+    { preferredLabel: 'vite', aliases: [], category: 'Web Technologies', description: 'Build tool and dev server' },
+    { preferredLabel: 'graphql', aliases: ['graph ql'], category: 'Web Technologies', description: 'Query language for APIs' },
+    { preferredLabel: 'rest api', aliases: ['rest', 'restful'], category: 'Web Technologies', description: 'RESTful API design' },
+    { preferredLabel: 'websocket', aliases: ['ws'], category: 'Web Technologies', description: 'Real-time communication protocol' },
+    
+    // Data Science & Analytics
+    { preferredLabel: 'pandas', aliases: [], category: 'Data Science', description: 'Python data analysis library' },
+    { preferredLabel: 'numpy', aliases: [], category: 'Data Science', description: 'Python numerical computing' },
+    { preferredLabel: 'tensorflow', aliases: ['tf'], category: 'Data Science', description: 'Machine learning framework' },
+    { preferredLabel: 'pytorch', aliases: ['torch'], category: 'Data Science', description: 'Deep learning framework' },
+    { preferredLabel: 'scikit learn', aliases: ['sklearn'], category: 'Data Science', description: 'Machine learning library' },
+    { preferredLabel: 'jupyter', aliases: ['jupyter notebook'], category: 'Data Science', description: 'Interactive computing environment' },
+    { preferredLabel: 'apache spark', aliases: ['spark'], category: 'Data Science', description: 'Big data processing framework' },
+    { preferredLabel: 'hadoop', aliases: [], category: 'Data Science', description: 'Big data framework' },
+    
+    // Security
+    { preferredLabel: 'owasp', aliases: [], category: 'Security', description: 'Web application security' },
+    { preferredLabel: 'penetration testing', aliases: ['pen testing', 'pentest'], category: 'Security', description: 'Security testing methodology' },
+    { preferredLabel: 'ssl tls', aliases: ['ssl', 'tls'], category: 'Security', description: 'Encryption protocols' },
+    { preferredLabel: 'oauth', aliases: ['oauth2'], category: 'Security', description: 'Authorization framework' },
+    { preferredLabel: 'jwt', aliases: ['json web token'], category: 'Security', description: 'Token-based authentication' },
+    
+    // Soft Skills
+    { preferredLabel: 'communication', aliases: ['verbal communication', 'written communication'], category: 'Soft Skills', description: 'Ability to convey information effectively' },
+    { preferredLabel: 'teamwork', aliases: ['collaboration'], category: 'Soft Skills', description: 'Working effectively in a team' },
+    { preferredLabel: 'problem solving', aliases: ['problem-solving', 'analytical thinking'], category: 'Soft Skills', description: 'Identifying and solving problems' },
+    { preferredLabel: 'leadership', aliases: [], category: 'Soft Skills', description: 'Ability to lead and guide others' },
+    { preferredLabel: 'time management', aliases: ['time management skills'], category: 'Soft Skills', description: 'Efficient use of time' },
+    { preferredLabel: 'adaptability', aliases: ['flexibility'], category: 'Soft Skills', description: 'Ability to adapt to change' },
+    { preferredLabel: 'critical thinking', aliases: [], category: 'Soft Skills', description: 'Objective analysis and evaluation' },
+    { preferredLabel: 'creativity', aliases: ['creative thinking'], category: 'Soft Skills', description: 'Innovative thinking and ideas' },
+    { preferredLabel: 'emotional intelligence', aliases: ['eq', 'ei'], category: 'Soft Skills', description: 'Understanding and managing emotions' },
+    { preferredLabel: 'negotiation', aliases: [], category: 'Soft Skills', description: 'Reaching mutually beneficial agreements' },
+    { preferredLabel: 'presentation skills', aliases: ['public speaking'], category: 'Soft Skills', description: 'Presenting information effectively' },
+    { preferredLabel: 'project management', aliases: ['pm'], category: 'Soft Skills', description: 'Planning and executing projects' },
+    
+    // Methodologies
+    { preferredLabel: 'agile', aliases: ['agile methodology'], category: 'Methodologies', description: 'Iterative development methodology' },
+    { preferredLabel: 'scrum', aliases: [], category: 'Methodologies', description: 'Agile framework' },
+    { preferredLabel: 'kanban', aliases: [], category: 'Methodologies', description: 'Visual workflow management' },
+    { preferredLabel: 'devops', aliases: ['dev ops'], category: 'Methodologies', description: 'Development and operations integration' },
+    { preferredLabel: 'ci cd', aliases: ['cicd', 'continuous integration', 'continuous deployment'], category: 'Methodologies', description: 'Continuous integration and deployment' },
+    { preferredLabel: 'tdd', aliases: ['test driven development'], category: 'Methodologies', description: 'Test-driven development approach' },
+    { preferredLabel: 'bdd', aliases: ['behavior driven development'], category: 'Methodologies', description: 'Behavior-driven development' },
+    { preferredLabel: 'microservices', aliases: ['microservices architecture'], category: 'Methodologies', description: 'Distributed system architecture' },
+    { preferredLabel: 'api design', aliases: ['api architecture'], category: 'Methodologies', description: 'Designing application programming interfaces' },
+  ];
+
+  let skillCreatedCount = 0;
+  let skillSkippedCount = 0;
+
+  for (const skill of skillTaxonomyData) {
+    try {
+      await prisma.skillTaxonomy.upsert({
+        where: { preferredLabel: skill.preferredLabel.toLowerCase() },
+        update: {
+          aliases: skill.aliases,
+          category: skill.category,
+          description: skill.description,
+          isActive: true,
+        },
+        create: {
+          preferredLabel: skill.preferredLabel.toLowerCase(),
+          aliases: skill.aliases,
+          category: skill.category,
+          description: skill.description,
+          isActive: true,
+        },
+      });
+      skillCreatedCount++;
+    } catch (error) {
+      skillSkippedCount++;
+      console.warn(`⚠️  Skipped skill: ${skill.preferredLabel}`, error);
+    }
+  }
+
+  console.log(`✅ Skills: ${skillCreatedCount} created/updated, ${skillSkippedCount} skipped`);
+
+  // Update summary
+  console.log(`✅ Skills Taxonomy: ${skillCreatedCount} skills across multiple categories`);
+
   console.log('\n🎉 Seed completed successfully!');
   console.log('\n📝 Test Credentials:');
   console.log(`   Email: testclient@example.com`);

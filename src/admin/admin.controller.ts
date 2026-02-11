@@ -324,6 +324,55 @@ export class AdminController {
     return auditLogs;
   }
 
+  @Get('companies')
+  async listCompanies(@Query('search') search?: string) {
+    const where: any = {};
+
+    if (search) {
+      where.OR = [
+        { name: { contains: search, mode: 'insensitive' } },
+        { email: { contains: search, mode: 'insensitive' } },
+      ];
+    }
+
+    const companies = await this.prisma.company.findMany({
+      where,
+      include: {
+        _count: {
+          select: {
+            users: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+    });
+
+    return companies;
+  }
+
+  @Patch('companies/:companyId/enterprise')
+  async updateEnterpriseStatus(
+    @Param('companyId') companyId: string,
+    @Body() body: { isEnterprise: boolean },
+  ) {
+    const company = await this.prisma.company.update({
+      where: { id: companyId },
+      data: { isEnterprise: body.isEnterprise },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        isEnterprise: true,
+        isActive: true,
+        updatedAt: true,
+      },
+    });
+
+    return company;
+  }
+
   @Get('growth')
   async getGrowthMetrics() {
     const now = new Date();

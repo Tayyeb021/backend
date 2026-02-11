@@ -1,21 +1,27 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject, forwardRef } from '@nestjs/common';
 import {
   generateICalFile,
   generateAddToCalendarLinks,
   CalendarEvent,
 } from './calendar-helper';
+import { CandidatesService } from '../candidates/candidates.service';
 
 @Injectable()
 export class EmailService {
   private readonly sendgrid: any;
+  private candidatesService: CandidatesService | null = null;
 
-  constructor() {
+  constructor(
+    @Inject(forwardRef(() => CandidatesService))
+    candidatesService: CandidatesService,
+  ) {
     // Use require for SendGrid to ensure compatibility with v8
     this.sendgrid = require('@sendgrid/mail');
     const apiKey = process.env.SENDGRID_API_KEY || '';
     if (apiKey) {
       this.sendgrid.setApiKey(apiKey);
     }
+    this.candidatesService = candidatesService;
   }
 
   async sendInterviewInvitation(
@@ -59,6 +65,9 @@ export class EmailService {
     jobTitle: string,
     interviewId: string,
     dateOptions: string[],
+    candidateId?: string,
+    candidateResumeUrl?: string | null,
+    generatedPassword?: string,
   ): Promise<void> {
     const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
     const scheduleUrl = `${frontendUrl}/interview/schedule/${interviewId}`;
@@ -108,6 +117,21 @@ export class EmailService {
       url: scheduleUrl,
     });
 
+    // Generate resume upload token if candidate has no resume
+    let resumeUploadUrl: string | null = null;
+    if (candidateId && !candidateResumeUrl && this.candidatesService) {
+      try {
+        const token = await this.candidatesService.generateResumeUploadToken(
+          candidateId,
+          interviewId,
+        );
+        resumeUploadUrl = `${frontendUrl}/candidate/resume-upload/${token}`;
+      } catch (error) {
+        console.error('Failed to generate resume upload token:', error);
+        // Continue without resume upload link if token generation fails
+      }
+    }
+
     const msg = {
       to,
       from: fromEmail,
@@ -117,6 +141,53 @@ export class EmailService {
           <h2 style="color: #4F46E5;">Interview Invitation</h2>
           <p>Dear ${candidateName},</p>
           <p>We are pleased to invite you for an AI-powered interview for the position of <strong>${jobTitle}</strong>.</p>
+          
+          ${generatedPassword ? `
+          <!-- Login Credentials Section - Only shown if user account was just created -->
+          <div style="margin: 25px 0; padding: 20px; background-color: #e0f2fe; border-left: 4px solid #0ea5e9; border-radius: 4px;">
+            <p style="margin: 0 0 15px 0; font-weight: bold; color: #0c4a6e; font-size: 16px;">
+              🔐 Your Login Credentials
+            </p>
+            <p style="margin: 0 0 10px 0; color: #075985; font-size: 14px; line-height: 1.6;">
+              We've created an account for you. Use these credentials to log in to your candidate dashboard:
+            </p>
+            <div style="background-color: #f0f9ff; padding: 12px; border-radius: 4px; margin: 10px 0; border: 1px solid #bae6fd;">
+              <p style="margin: 5px 0; font-family: monospace; color: #0c4a6e; font-size: 14px;">
+                <strong>Email:</strong> ${to}<br>
+                <strong>Password:</strong> <span style="background-color: #fff; padding: 2px 6px; border-radius: 3px; font-weight: bold;">${generatedPassword}</span>
+              </p>
+            </div>
+            <p style="margin: 10px 0 0 0; font-size: 12px; color: #075985;">
+              ⚠️ <strong>Please save this password securely.</strong> You can change it after logging in.
+            </p>
+            <p style="margin: 15px 0 0 0;">
+              <a href="${frontendUrl}/login" style="background-color: #0ea5e9; color: white; padding: 10px 20px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold; font-size: 14px;">
+                🔑 Login Now
+              </a>
+            </p>
+          </div>
+          ` : ''}
+          
+          ${resumeUploadUrl ? `
+          <!-- Resume Upload Section - Only shown if candidate has no resume -->
+          <div style="margin: 25px 0; padding: 20px; background-color: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 4px;">
+            <p style="margin: 0 0 15px 0; font-weight: bold; color: #92400e; font-size: 16px;">
+              📄 Complete Your Profile - Upload Your Resume
+            </p>
+            <p style="margin: 0 0 15px 0; color: #78350f; font-size: 14px; line-height: 1.6;">
+              We noticed you haven't uploaded your resume yet. Help us get to know you better by uploading your resume. This will help us prepare a more personalized interview experience for you.
+            </p>
+            <p style="margin: 0 0 15px 0;">
+              <a href="${resumeUploadUrl}" style="background-color: #f59e0b; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold;">
+                📤 Upload Resume Now
+              </a>
+            </p>
+            <p style="margin: 0; font-size: 12px; color: #92400e;">
+              💡 Tip: You can upload your resume now or after scheduling your interview. Both options are available!
+            </p>
+          </div>
+          ` : ''}
+          
           <p>Please select one of the following available time slots:</p>
           ${dateOptionsHtml}
           <p style="margin-top: 30px;">
@@ -283,6 +354,123 @@ export class EmailService {
     } catch (error: any) {
       console.error('Failed to send confirmation email:', error);
       throw new Error(`Failed to send confirmation email: ${error.message}`);
+    }
+  }
+
+  /**
+   * Generic email sending method for automation and other use cases
+   */
+  async sendEmail(
+    to: string,
+    subject: string,
+    html: string,
+    text?: string,
+    from?: string,
+  ): Promise<void> {
+    const msg = {
+      to,
+      from: from || process.env.SENDGRID_FROM_EMAIL || 'noreply@falconrecruiter.com',
+      subject,
+      html,
+      text: text || html.replace(/<[^>]*>/g, ''), // Strip HTML tags for text version
+    };
+
+    try {
+      await this.sendgrid.send(msg);
+    } catch (error: any) {
+      console.error('Failed to send email:', error);
+      throw new Error(`Failed to send email: ${error.message}`);
+    }
+  }
+
+  async sendFeedbackEmail(
+    to: string,
+    candidateName: string,
+    content: string,
+    jobTitle?: string,
+    scores?: {
+      technical?: number;
+      communication?: number;
+      problemSolving?: number;
+      culturalFit?: number;
+      overall?: number;
+    } | null,
+  ): Promise<void> {
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'noreply@falconrecruiter.com';
+
+    let scoresHtml = '';
+    if (scores) {
+      scoresHtml = `
+        <div style="margin: 20px 0; padding: 15px; background-color: #f9fafb; border-radius: 8px;">
+          <h3 style="margin-top: 0; color: #1f2937;">Interview Scores</h3>
+          <table style="width: 100%; border-collapse: collapse;">
+            ${scores.technical !== undefined ? `
+              <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;"><strong>Technical:</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">${scores.technical}%</td>
+              </tr>
+            ` : ''}
+            ${scores.communication !== undefined ? `
+              <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;"><strong>Communication:</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">${scores.communication}%</td>
+              </tr>
+            ` : ''}
+            ${scores.problemSolving !== undefined ? `
+              <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;"><strong>Problem Solving:</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">${scores.problemSolving}%</td>
+              </tr>
+            ` : ''}
+            ${scores.culturalFit !== undefined ? `
+              <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;"><strong>Cultural Fit:</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;">${scores.culturalFit}%</td>
+              </tr>
+            ` : ''}
+            ${scores.overall !== undefined ? `
+              <tr>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;"><strong>Overall Score:</strong></td>
+                <td style="padding: 8px; border-bottom: 1px solid #e5e7eb;"><strong>${scores.overall}%</strong></td>
+              </tr>
+            ` : ''}
+          </table>
+        </div>
+      `;
+    }
+
+    const msg = {
+      to,
+      from: fromEmail,
+      subject: jobTitle ? `Feedback - ${jobTitle}` : 'Interview Feedback',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
+          <h2 style="color: #1f2937; margin-bottom: 20px;">Interview Feedback</h2>
+          <p>Dear ${candidateName},</p>
+          <div style="margin: 20px 0; padding: 15px; background-color: #ffffff; border-left: 4px solid #4F46E5; border-radius: 4px;">
+            ${content.split('\n').map(para => `<p style="margin: 10px 0; line-height: 1.6; color: #374151;">${para || '<br>'}</p>`).join('')}
+          </div>
+          ${scoresHtml}
+          <p style="margin-top: 30px;">You can view this feedback and your application status by logging into your candidate portal.</p>
+          <p style="margin-top: 20px;">
+            <a href="${frontendUrl}/my-application" style="background-color: #4F46E5; color: white; padding: 12px 24px; text-decoration: none; border-radius: 4px; display: inline-block;">
+              View Application
+            </a>
+          </p>
+          <p style="margin-top: 30px; color: #6b7280; font-size: 14px;">
+            Best regards,<br>
+            Falcon AI Recruiter Team
+          </p>
+        </div>
+      `,
+    };
+
+    try {
+      await this.sendgrid.send(msg);
+    } catch (error: any) {
+      console.error('Failed to send feedback email:', error);
+      throw new Error(`Failed to send feedback email: ${error.message}`);
     }
   }
 }

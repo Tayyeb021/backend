@@ -8,54 +8,78 @@ datasource db {
 }
 
 model Company {
-  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name                String    @db.VarChar
-  tradeLicenseNumber  String?   @unique @db.VarChar
-  registrationNumber  String?   @unique @db.VarChar
-  vatTrn              String?   @unique @db.VarChar
-  corporateTaxTrn     String?   @unique @db.VarChar
-  freeZoneName        String?   @db.VarChar
-  licenseType         String?   @db.VarChar
-  licenseExpiryDate   DateTime? @db.Timestamp(6)
-  industry            String?   @db.VarChar
-  companySize         String?   @db.VarChar
-  website             String?   @db.VarChar
-  email               String    @db.VarChar
-  phone               String?   @db.VarChar
-  address             String?
-  poBox               String?   @db.VarChar
-  city                String?   @db.VarChar
-  emirate             String?   @db.VarChar
-  country             String?   @default("UAE") @db.VarChar
-  postalCode          String?   @db.VarChar
-  logoUrl             String?
-  description         String?
-  authorizedSignatory Json?
-  isActive            Boolean   @default(true)
-  createdAt           DateTime  @default(now()) @db.Timestamp(6)
-  updatedAt           DateTime  @default(now()) @updatedAt @db.Timestamp(6)
-  users               User[]
+  id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                  String             @db.VarChar
+  tradeLicenseNumber    String?            @unique @db.VarChar
+  registrationNumber    String?            @unique @db.VarChar
+  vatTrn                String?            @unique @db.VarChar
+  corporateTaxTrn       String?            @unique @db.VarChar
+  freeZoneName          String?            @db.VarChar
+  licenseType           String?            @db.VarChar
+  licenseExpiryDate     DateTime?          @db.Timestamp(6)
+  industry              String?            @db.VarChar
+  companySize           String?            @db.VarChar
+  website               String?            @db.VarChar
+  email                 String             @db.VarChar
+  phone                 String?            @db.VarChar
+  address               String?
+  poBox                 String?            @db.VarChar
+  city                  String?            @db.VarChar
+  emirate               String?            @db.VarChar
+  country               String?            @default("UAE") @db.VarChar
+  postalCode            String?            @db.VarChar
+  logoUrl               String?
+  description           String?
+  authorizedSignatory   Json?
+  isActive              Boolean            @default(true)
+  isEnterprise          Boolean            @default(false)
+  createdAt             DateTime           @default(now()) @db.Timestamp(6)
+  updatedAt             DateTime           @default(now()) @updatedAt @db.Timestamp(6)
+  users                 User[]
+  integrations          Integration[]
+  analytics             AnalyticsMetric[]
+  whiteLabelConfig      WhiteLabelConfig?
+  feedbackTemplates     FeedbackTemplate[]
+  feedbackEnabled       Boolean            @default(true)
+  defaultFeedbackPolicy FeedbackPolicy?    @default(manual)
 
   @@map("companies")
 }
 
 model User {
-  id         String      @id(map: "PK_a3ffb1c0c8416b9fc6f907b7433") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  email      String      @unique(map: "IDX_USERS_EMAIL") @db.VarChar
-  password   String      @db.VarChar
-  firstName  String      @db.VarChar
-  lastName   String      @db.VarChar
-  phone      String?     @db.VarChar
-  role       UserRole    @default(client)
-  isActive   Boolean     @default(true)
-  createdAt  DateTime    @default(now()) @db.Timestamp(6)
-  updatedAt  DateTime    @default(now()) @updatedAt @db.Timestamp(6)
-  companyId  String?     @db.Uuid
-  clients            Client[]            @relation("ClientCreatedBy")
-  interviews         Interview[]         @relation("InterviewClient")
-  jobs               Job[]               @relation("JobClient")
-  company            Company?            @relation(fields: [companyId], references: [id])
-  interviewTemplates InterviewTemplate[] @relation("TemplateClient")
+  id                       String                @id(map: "PK_a3ffb1c0c8416b9fc6f907b7433") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  email                    String                @unique(map: "IDX_USERS_EMAIL") @db.VarChar
+  password                 String                @db.VarChar
+  firstName                String                @db.VarChar
+  lastName                 String                @db.VarChar
+  phone                    String?               @db.VarChar
+  role                     UserRole              @default(client)
+  isActive                 Boolean               @default(true)
+  createdAt                DateTime              @default(now()) @db.Timestamp(6)
+  updatedAt                DateTime              @default(now()) @updatedAt @db.Timestamp(6)
+  companyId                String?               @db.Uuid
+  clients                  Client[]              @relation("ClientCreatedBy")
+  interviews               Interview[]           @relation("InterviewClient")
+  jobs                     Job[]                 @relation("JobClient")
+  company                  Company?              @relation(fields: [companyId], references: [id])
+  interviewTemplates       InterviewTemplate[]   @relation("TemplateClient")
+  comments                 CandidateComment[]    @relation("CommentUser")
+  sharedCandidates         CandidateShare[]      @relation("SharedBy")
+  receivedShares           CandidateShare[]      @relation("SharedWith")
+  activityLogs             ActivityLog[]         @relation("ActivityUser")
+  integrations             Integration[]         @relation("UserIntegrations")
+  analytics                AnalyticsMetric[]     @relation("UserAnalytics")
+  aiChats                  AIAssistantChat[]     @relation("AIAssistantChats")
+  assessments              CodingAssessment[]    @relation("AssessmentRecruiter")
+  roleSpecs                RoleSpec[]            @relation("RoleSpecClient")
+  lockedRoleSpecs          RoleSpec[]            @relation("RoleSpecLockedBy")
+  evaluationPolicies       EvaluationPolicy[]    @relation("EvaluationPolicyClient")
+  lockedEvaluationPolicies EvaluationPolicy[]    @relation("EvaluationPolicyLockedBy")
+  certifiedProfiles        CertifiedProfile[]    @relation("CertifiedProfileCertifiedBy")
+  hiringDecisions          HiringDecision[]      @relation("HiringDecisionMadeBy")
+  evaluationBlueprints     EvaluationBlueprint[] @relation("EvaluationBlueprintClient")
+  feedbackTemplates        FeedbackTemplate[]    @relation("FeedbackTemplateClient")
+  createdFeedback          CandidateFeedback[]   @relation("FeedbackCreatedBy")
 
   @@map("users")
 }
@@ -100,8 +124,21 @@ model Job {
   client   User   @relation("JobClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   // Relations
-  candidates Candidate[]
-  interviews Interview[]
+  candidates         Candidate[]
+  interviews         Interview[]
+  insights           CandidateInsight[]
+  assessments        CodingAssessment[]
+  roleSpecId         String?             @db.Uuid
+  roleSpec           RoleSpec?           @relation(fields: [roleSpecId], references: [id], onDelete: SetNull)
+  evaluationPolicyId String?             @db.Uuid
+  evaluationPolicy   EvaluationPolicy?   @relation(fields: [evaluationPolicyId], references: [id], onDelete: SetNull)
+  certifiedProfiles  CertifiedProfile[]
+  hiringDecisions    HiringDecision[]
+  candidateFeedback  CandidateFeedback[]
+  feedbackEnabled    Boolean             @default(true)
+  feedbackPolicy     FeedbackPolicy?     @default(manual)
+  feedbackTemplateId String?             @db.Uuid
+  feedbackTemplate   FeedbackTemplate?   @relation("JobFeedbackTemplate", fields: [feedbackTemplateId], references: [id], onDelete: SetNull)
 
   // Metadata
   createdAt DateTime @default(now()) @db.Timestamp(6)
@@ -114,23 +151,31 @@ model Job {
 }
 
 model Candidate {
-  id              String          @id(map: "PK_140681296bf033ab1eb95288abb") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  firstName       String          @db.VarChar
-  lastName        String          @db.VarChar
-  email           String          @unique(map: "IDX_CANDIDATES_EMAIL") @db.VarChar
-  phone           String?         @db.VarChar
-  resumeUrl       String?
-  profileData     Json?
-  skills          String[]
-  experienceYears Int?
-  location        String?         @db.VarChar
-  sourcePlatform  String?         @db.VarChar
-  status          CandidateStatus @default(sourced)
-  jobId           String          @db.Uuid
-  createdAt       DateTime        @default(now()) @db.Timestamp(6)
-  updatedAt       DateTime        @default(now()) @updatedAt @db.Timestamp(6)
-  job             Job             @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_426d378178da5713f1ab30daabc")
-  interviews      Interview[]
+  id                String              @id(map: "PK_140681296bf033ab1eb95288abb") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  firstName         String              @db.VarChar
+  lastName          String              @db.VarChar
+  email             String              @unique(map: "IDX_CANDIDATES_EMAIL") @db.VarChar
+  phone             String?             @db.VarChar
+  resumeUrl         String?
+  profileData       Json?
+  skills            String[]
+  experienceYears   Int?
+  location          String?             @db.VarChar
+  sourcePlatform    String?             @db.VarChar
+  status            CandidateStatus     @default(sourced)
+  jobId             String              @db.Uuid
+  createdAt         DateTime            @default(now()) @db.Timestamp(6)
+  updatedAt         DateTime            @default(now()) @updatedAt @db.Timestamp(6)
+  job               Job                 @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_426d378178da5713f1ab30daabc")
+  interviews        Interview[]
+  comments          CandidateComment[]
+  shares            CandidateShare[]
+  activityLogs      ActivityLog[]
+  insights          CandidateInsight[]
+  assessments       CodingAssessment[]
+  certifiedProfiles CertifiedProfile[]
+  hiringDecisions   HiringDecision[]
+  feedback          CandidateFeedback[]
 
   @@index([jobId], map: "IDX_CANDIDATES_JOB_ID")
   @@index([status], map: "IDX_CANDIDATES_STATUS")
@@ -138,36 +183,41 @@ model Candidate {
 }
 
 model Interview {
-  id                       String            @id(map: "PK_fd41af1f96d698fa33c2f070f47") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  candidateId              String            @db.Uuid
-  jobId                    String            @db.Uuid
-  clientId                 String            @db.Uuid
-  status                   InterviewStatus   @default(scheduled)
-  type                     InterviewType     @default(live)
-  language                 InterviewLanguage @default(en)
-  scheduledAt              DateTime?         @db.Timestamp(6)
-  startedAt                DateTime?         @db.Timestamp(6)
-  completedAt              DateTime?         @db.Timestamp(6)
-  dailyRoomId              String?           @db.VarChar
-  videoUrl                 String?           @db.VarChar
+  id                       String               @id(map: "PK_fd41af1f96d698fa33c2f070f47") @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId              String               @db.Uuid
+  jobId                    String               @db.Uuid
+  clientId                 String               @db.Uuid
+  status                   InterviewStatus      @default(scheduled)
+  type                     InterviewType        @default(live)
+  language                 InterviewLanguage    @default(en)
+  scheduledAt              DateTime?            @db.Timestamp(6)
+  startedAt                DateTime?            @db.Timestamp(6)
+  completedAt              DateTime?            @db.Timestamp(6)
+  dailyRoomId              String?              @db.VarChar
+  videoUrl                 String?              @db.VarChar
   transcript               String?
   transcriptWithTimestamps Json?
   scores                   Json?
   aiSummary                String?
-  templateId               String?           @db.Uuid
-  allowSelfScheduling      Boolean          @default(false)
-  deadline                 DateTime?         @db.Timestamp(6)
-  invitationSentAt         DateTime?         @db.Timestamp(6)
-  candidateStartedAt        DateTime?         @db.Timestamp(6)
-  dateOptions              Json?            // Array of 3 date options: [{ date: string, selected: boolean }]
-  roundNumber              Int?             @default(1) // Interview round number (1, 2, 3, etc.)
-  externalMeetingUrl       String?          @db.VarChar // External meeting URL (Zoom, Teams, etc.)
-  createdAt                DateTime          @default(now()) @db.Timestamp(6)
-  updatedAt                DateTime          @default(now()) @updatedAt @db.Timestamp(6)
-  job                      Job               @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_86c6a5b65c91b118189dc011aaa")
-  candidate                Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_9b47fb5a4e06ccb14d20d2f06fd")
-  client                   User              @relation("InterviewClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
-  template                 InterviewTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  templateId               String?              @db.Uuid
+  allowSelfScheduling      Boolean              @default(false)
+  deadline                 DateTime?            @db.Timestamp(6)
+  invitationSentAt         DateTime?            @db.Timestamp(6)
+  candidateStartedAt       DateTime?            @db.Timestamp(6)
+  dateOptions              Json? // Array of 3 date options: [{ date: string, selected: boolean }]
+  roundNumber              Int?                 @default(1) // Interview round number (1, 2, 3, etc.)
+  externalMeetingUrl       String?              @db.VarChar // External meeting URL (Zoom, Teams, etc.)
+  createdAt                DateTime             @default(now()) @db.Timestamp(6)
+  updatedAt                DateTime             @default(now()) @updatedAt @db.Timestamp(6)
+  job                      Job                  @relation(fields: [jobId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_86c6a5b65c91b118189dc011aaa")
+  candidate                Candidate            @relation(fields: [candidateId], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "FK_9b47fb5a4e06ccb14d20d2f06fd")
+  client                   User                 @relation("InterviewClient", fields: [clientId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  template                 InterviewTemplate?   @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  assessments              CodingAssessment[]
+  scoreEvidence            ScoreEvidence[]      @relation("ScoreEvidenceInterview")
+  evaluationBlueprintId    String?              @db.Uuid
+  evaluationBlueprint      EvaluationBlueprint? @relation(fields: [evaluationBlueprintId], references: [id], onDelete: SetNull)
+  feedback                 CandidateFeedback[]
 
   @@index([candidateId], map: "IDX_INTERVIEWS_CANDIDATE_ID")
   @@index([clientId], map: "IDX_INTERVIEWS_CLIENT_ID")
@@ -177,33 +227,82 @@ model Interview {
   @@map("interviews")
 }
 
+model CodingAssessment {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId String  @db.Uuid
+  jobId       String  @db.Uuid
+  interviewId String? @db.Uuid // Link to the interview that triggered this
+  recruiterId String  @db.Uuid // Who created it
+
+  question  String @db.Text
+  language  String @default("javascript") @db.VarChar(50)
+  testCases Json // Array of test cases: [{ input: any, expected: any, name: string }]
+  maxScore  Int    @default(100)
+
+  status      AssessmentStatus @default(pending)
+  startedAt   DateTime?        @db.Timestamp(6)
+  submittedAt DateTime?        @db.Timestamp(6)
+  deadline    DateTime?        @db.Timestamp(6)
+
+  codeSubmission String?   @db.Text
+  testResults    Json? // Array of test results: [{ name: string, passed: boolean, input: any, expected: any, output: any, error?: string, executionTime?: string }]
+  score          Int? // Calculated score based on passed tests
+  timeSpent      Int? // Time spent in seconds
+  codeReview     Json? // AI code review from Gemini: { overallScore, qualityScore, efficiencyScore, readabilityScore, bestPracticesScore, strengths, weaknesses, suggestions, review, complexity, timeComplexity, spaceComplexity }
+  accessToken    String?   @unique @db.VarChar(255) // Secure token for public candidate access
+  tokenExpiry    DateTime? @db.Timestamp(6) // Token expiry date
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  candidate     Candidate       @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job           Job             @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  interview     Interview?      @relation(fields: [interviewId], references: [id], onDelete: SetNull)
+  recruiter     User            @relation("AssessmentRecruiter", fields: [recruiterId], references: [id], onDelete: Cascade)
+  scoreEvidence ScoreEvidence[] @relation("ScoreEvidenceAssessment")
+
+  @@index([candidateId], map: "IDX_ASSESSMENT_CANDIDATE")
+  @@index([jobId], map: "IDX_ASSESSMENT_JOB")
+  @@index([interviewId], map: "IDX_ASSESSMENT_INTERVIEW")
+  @@index([recruiterId], map: "IDX_ASSESSMENT_RECRUITER")
+  @@index([status], map: "IDX_ASSESSMENT_STATUS")
+  @@map("coding_assessments")
+}
+
+enum AssessmentStatus {
+  pending
+  in_progress
+  submitted
+  expired
+}
+
 model InterviewTemplate {
-  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name        String            @db.VarChar(255)
+  id          String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String              @db.VarChar(255)
   description String?
-  clientId    String            @db.Uuid
-  isDefault   Boolean           @default(false)
-  isPublic    Boolean           @default(false)
-  createdAt   DateTime          @default(now()) @db.Timestamp(6)
-  updatedAt   DateTime          @default(now()) @updatedAt @db.Timestamp(6)
-  client      User              @relation("TemplateClient", fields: [clientId], references: [id], onDelete: Cascade)
+  clientId    String              @db.Uuid
+  isDefault   Boolean             @default(false)
+  isPublic    Boolean             @default(false)
+  createdAt   DateTime            @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime            @default(now()) @updatedAt @db.Timestamp(6)
+  client      User                @relation("TemplateClient", fields: [clientId], references: [id], onDelete: Cascade)
   questions   InterviewQuestion[]
-  interviews Interview[]
+  interviews  Interview[]
 
   @@index([clientId], map: "IDX_TEMPLATES_CLIENT_ID")
   @@map("interview_templates")
 }
 
 model InterviewQuestion {
-  id          String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  templateId  String            @db.Uuid
-  question    String
-  type        QuestionType      @default(behavioral)
-  order       Int               @default(0)
-  timeLimit   Int?              // Time limit in seconds
-  createdAt   DateTime          @default(now()) @db.Timestamp(6)
-  updatedAt   DateTime          @default(now()) @updatedAt @db.Timestamp(6)
-  template    InterviewTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  id         String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  templateId String            @db.Uuid
+  question   String
+  type       QuestionType      @default(behavioral)
+  order      Int               @default(0)
+  timeLimit  Int? // Time limit in seconds
+  createdAt  DateTime          @default(now()) @db.Timestamp(6)
+  updatedAt  DateTime          @default(now()) @updatedAt @db.Timestamp(6)
+  template   InterviewTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@index([templateId], map: "IDX_QUESTIONS_TEMPLATE_ID")
   @@map("interview_questions")
@@ -363,19 +462,79 @@ enum UserRole {
   interviewee
 }
 
+enum RoleSpecStatus {
+  draft
+  locked
+  archived
+}
+
+enum RoleSpecSource {
+  new
+  template
+  clone
+}
+
+enum ProfileCertificationStatus {
+  pending
+  certified
+  rejected
+  expired
+}
+
+enum HiringDecisionStatus {
+  pending
+  approved
+  rejected
+  on_hold
+}
+
+enum HiringDecisionType {
+  hire
+  reject
+  hold
+  offer_pending
+}
+
+enum FeedbackOutcomeType {
+  hire
+  reject
+  hold
+  offer_pending
+}
+
+enum FeedbackPolicy {
+  automatic
+  manual
+  disabled
+}
+
+enum FeedbackDeliveryMethod {
+  email
+  in_app
+  both
+}
+
+enum FeedbackStatus {
+  draft
+  pending_review
+  approved
+  sent
+  rejected
+}
+
 model AuditLog {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId      String?  @db.Uuid
-  userEmail   String?  @db.VarChar
-  action      String   @db.VarChar(100)
-  resource    String   @db.VarChar(100)
-  resourceId  String?  @db.Uuid
-  changes     Json?
-  ipAddress   String?  @db.VarChar(45)
-  userAgent   String?
-  metadata    Json?
-  organizationId String? @db.Uuid
-  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String?  @db.Uuid
+  userEmail      String?  @db.VarChar
+  action         String   @db.VarChar(100)
+  resource       String   @db.VarChar(100)
+  resourceId     String?  @db.Uuid
+  changes        Json?
+  ipAddress      String?  @db.VarChar(45)
+  userAgent      String?
+  metadata       Json?
+  organizationId String?  @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
 
   @@index([userId], map: "IDX_AUDIT_USER_ID")
   @@index([resource, resourceId], map: "IDX_AUDIT_RESOURCE")
@@ -386,32 +545,32 @@ model AuditLog {
 }
 
 model Permission {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name          String   @unique @db.VarChar(100)
-  resource      String   @db.VarChar(100)
-  action        String   @db.VarChar(50)
-  description   String?  @db.VarChar(255)
-  conditions    Json?
-  createdAt     DateTime @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String   @unique @db.VarChar(100)
+  resource    String   @db.VarChar(100)
+  action      String   @db.VarChar(50)
+  description String?  @db.VarChar(255)
+  conditions  Json?
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  updatedAt   DateTime @default(now()) @updatedAt @db.Timestamp(6)
 
-  roles         RolePermission[]
+  roles RolePermission[]
 
   @@index([resource, action], map: "IDX_PERM_RESOURCE_ACTION")
   @@map("permissions")
 }
 
 model Role {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name          String   @db.VarChar(100)
-  description   String?  @db.VarChar(255)
-  organizationId String? @db.Uuid
-  isSystem      Boolean  @default(false)
-  isActive      Boolean  @default(true)
-  createdAt     DateTime @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String   @db.VarChar(100)
+  description    String?  @db.VarChar(255)
+  organizationId String?  @db.Uuid
+  isSystem       Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamp(6)
 
-  permissions   RolePermission[]
+  permissions         RolePermission[]
   userRoleAssignments UserRoleAssignment[]
 
   @@unique([name, organizationId], map: "UQ_ROLE_NAME_ORG")
@@ -425,22 +584,22 @@ model RolePermission {
   permissionId String   @db.Uuid
   createdAt    DateTime @default(now()) @db.Timestamp(6)
 
-  role         Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
-  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@unique([roleId, permissionId], map: "UQ_ROLE_PERM")
   @@map("role_permissions")
 }
 
 model UserRoleAssignment {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId       String   @db.Uuid
-  roleId       String   @db.Uuid
-  organizationId String? @db.Uuid
-  assignedAt   DateTime @default(now()) @db.Timestamp(6)
-  assignedBy   String?  @db.Uuid
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String   @db.Uuid
+  roleId         String   @db.Uuid
+  organizationId String?  @db.Uuid
+  assignedAt     DateTime @default(now()) @db.Timestamp(6)
+  assignedBy     String?  @db.Uuid
 
-  role         Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  role Role @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@unique([userId, roleId, organizationId], map: "UQ_USER_ROLE")
   @@index([userId], map: "IDX_USER_ROLE_USER")
@@ -449,37 +608,598 @@ model UserRoleAssignment {
 }
 
 model Webhook {
-  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  organizationId String? @db.Uuid
-  url           String   @db.VarChar(500)
-  events        String[] // Array of event types
-  secret        String   @db.VarChar(255)
-  isActive      Boolean  @default(true)
-  headers       Json?
-  createdAt     DateTime @default(now()) @db.Timestamp(6)
-  updatedAt     DateTime @default(now()) @updatedAt @db.Timestamp(6)
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  organizationId String?  @db.Uuid
+  url            String   @db.VarChar(500)
+  events         String[] // Array of event types
+  secret         String   @db.VarChar(255)
+  isActive       Boolean  @default(true)
+  headers        Json?
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamp(6)
 
-  deliveries    WebhookDelivery[]
+  deliveries WebhookDelivery[]
 
   @@index([organizationId], map: "IDX_WEBHOOK_ORG")
   @@map("webhooks")
 }
 
 model WebhookDelivery {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  webhookId   String   @db.Uuid
-  event       String   @db.VarChar(100)
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  webhookId   String    @db.Uuid
+  event       String    @db.VarChar(100)
   payload     Json
-  status      String   @db.VarChar(50) // pending, success, failed
+  status      String    @db.VarChar(50) // pending, success, failed
   statusCode  Int?
   response    String?
-  attempts    Int      @default(0)
+  attempts    Int       @default(0)
   deliveredAt DateTime? @db.Timestamp(6)
-  createdAt   DateTime @default(now()) @db.Timestamp(6)
+  createdAt   DateTime  @default(now()) @db.Timestamp(6)
 
-  webhook     Webhook  @relation(fields: [webhookId], references: [id], onDelete: Cascade)
+  webhook Webhook @relation(fields: [webhookId], references: [id], onDelete: Cascade)
 
   @@index([webhookId], map: "IDX_WEBHOOK_DELIVERY_WEBHOOK")
   @@index([status], map: "IDX_WEBHOOK_DELIVERY_STATUS")
   @@map("webhook_deliveries")
+}
+
+model CandidateComment {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId      String   @db.Uuid
+  userId           String   @db.Uuid
+  content          String   @db.Text
+  mentionedUserIds String[] // Array of user IDs mentioned in the comment
+  createdAt        DateTime @default(now()) @db.Timestamp(6)
+  updatedAt        DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user      User      @relation("CommentUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId], map: "IDX_COMMENT_CANDIDATE")
+  @@index([userId], map: "IDX_COMMENT_USER")
+  @@map("candidate_comments")
+}
+
+model CandidateShare {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId      String   @db.Uuid
+  sharedByUserId   String   @db.Uuid
+  sharedWithUserId String   @db.Uuid
+  sharedAt         DateTime @default(now()) @db.Timestamp(6)
+  notes            String?  @db.Text
+
+  candidate  Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  sharedBy   User      @relation("SharedBy", fields: [sharedByUserId], references: [id], onDelete: Cascade)
+  sharedWith User      @relation("SharedWith", fields: [sharedWithUserId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId], map: "IDX_SHARE_CANDIDATE")
+  @@index([sharedByUserId], map: "IDX_SHARE_BY")
+  @@index([sharedWithUserId], map: "IDX_SHARE_WITH")
+  @@map("candidate_shares")
+}
+
+model ActivityLog {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId String?  @db.Uuid
+  userId      String   @db.Uuid
+  action      String   @db.VarChar(100)
+  details     Json?
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+
+  candidate Candidate? @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  user      User       @relation("ActivityUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId], map: "IDX_ACTIVITY_CANDIDATE")
+  @@index([userId], map: "IDX_ACTIVITY_USER")
+  @@index([action], map: "IDX_ACTIVITY_ACTION")
+  @@index([createdAt], map: "IDX_ACTIVITY_CREATED")
+  @@map("activity_logs")
+}
+
+model AutomationRule {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String   @db.VarChar(255)
+  description    String?  @db.Text
+  trigger        String   @db.VarChar(100) // e.g., 'interview_completed', 'candidate_status_changed'
+  conditions     Json // Conditions that must be met
+  actions        Json // Actions to perform
+  isActive       Boolean  @default(true)
+  organizationId String?  @db.Uuid
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([trigger], map: "IDX_AUTOMATION_TRIGGER")
+  @@index([isActive], map: "IDX_AUTOMATION_ACTIVE")
+  @@index([organizationId], map: "IDX_AUTOMATION_ORG")
+  @@map("automation_rules")
+}
+
+// AI-Powered Candidate Insights
+model CandidateInsight {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId        String   @db.Uuid
+  jobId              String?  @db.Uuid
+  successProbability Float    @default(0) // 0-100
+  retentionRisk      Float    @default(50) // 0-100 (lower is better)
+  teamFitScore       Float    @default(0) // 0-100
+  timeToProductivity Int? // Days predicted
+  salaryExpectation  Json? // Min/max range
+  strengths          String[]
+  risks              String[]
+  recommendations    String[]
+  insights           Json? // Additional AI-generated insights
+  calculatedAt       DateTime @default(now()) @db.Timestamp(6)
+  updatedAt          DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  candidate Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job       Job?      @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, jobId], map: "UQ_INSIGHT_CANDIDATE_JOB")
+  @@index([candidateId], map: "IDX_INSIGHT_CANDIDATE")
+  @@index([jobId], map: "IDX_INSIGHT_JOB")
+  @@index([candidateId, jobId], map: "IDX_INSIGHT_CANDIDATE_JOB")
+  @@map("candidate_insights")
+}
+
+// Market Intelligence Data
+model MarketIntelligence {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobTitle        String   @db.VarChar(255)
+  location        String   @db.VarChar(100)
+  industry        String?  @db.VarChar(100)
+  experienceLevel String?  @db.VarChar(50)
+  avgSalary       Float? // Average salary in local currency
+  minSalary       Float?
+  maxSalary       Float?
+  demandTrend     String?  @db.VarChar(50) // "increasing", "stable", "decreasing"
+  skillDemand     Json? // { skill: demand_score }
+  marketData      Json? // Additional market data
+  source          String?  @db.VarChar(100) // Data source
+  collectedAt     DateTime @default(now()) @db.Timestamp(6)
+  updatedAt       DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@unique([jobTitle, location, experienceLevel], map: "UQ_MARKET_INTEL")
+  @@index([jobTitle], map: "IDX_MARKET_JOB_TITLE")
+  @@index([location], map: "IDX_MARKET_LOCATION")
+  @@map("market_intelligence")
+}
+
+// Integration Configurations
+model Integration {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String?   @db.Uuid
+  companyId    String?   @db.Uuid
+  type         String    @db.VarChar(50) // "ats", "hris", "slack", "teams", "calendar", "zapier"
+  name         String    @db.VarChar(255)
+  provider     String    @db.VarChar(100) // "greenhouse", "lever", "workday", "slack", etc.
+  config       Json // OAuth tokens, API keys, webhook URLs, etc.
+  isActive     Boolean   @default(true)
+  lastSyncAt   DateTime?
+  syncStatus   String?   @db.VarChar(50) // "success", "error", "pending"
+  errorMessage String?
+  createdAt    DateTime  @default(now()) @db.Timestamp(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @db.Timestamp(6)
+
+  user    User?    @relation("UserIntegrations", fields: [userId], references: [id], onDelete: Cascade)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "IDX_INTEGRATION_USER")
+  @@index([companyId], map: "IDX_INTEGRATION_COMPANY")
+  @@index([type], map: "IDX_INTEGRATION_TYPE")
+  @@map("integrations")
+}
+
+// Analytics and Metrics
+model AnalyticsMetric {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId       String?  @db.Uuid
+  companyId    String?  @db.Uuid
+  metricType   String   @db.VarChar(100) // "time_to_hire", "cost_per_hire", "quality_of_hire", etc.
+  metricValue  Float
+  metadata     Json? // Additional context
+  period       String?  @db.VarChar(50) // "daily", "weekly", "monthly", "yearly"
+  periodStart  DateTime @db.Timestamp(6)
+  periodEnd    DateTime @db.Timestamp(6)
+  calculatedAt DateTime @default(now()) @db.Timestamp(6)
+
+  user    User?    @relation("UserAnalytics", fields: [userId], references: [id], onDelete: Cascade)
+  company Company? @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "IDX_ANALYTICS_USER")
+  @@index([companyId], map: "IDX_ANALYTICS_COMPANY")
+  @@index([metricType], map: "IDX_ANALYTICS_TYPE")
+  @@index([periodStart, periodEnd], map: "IDX_ANALYTICS_PERIOD")
+  @@map("analytics_metrics")
+}
+
+// AI Assistant Chat History
+model AIAssistantChat {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId      String   @db.Uuid
+  sessionId   String   @db.VarChar(255)
+  message     String   @db.Text
+  response    String?  @db.Text
+  messageType String   @default("user") @db.VarChar(20) // "user", "assistant", "system"
+  context     Json? // Additional context for the message
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+
+  user User @relation("AIAssistantChats", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId], map: "IDX_AI_CHAT_USER")
+  @@index([sessionId], map: "IDX_AI_CHAT_SESSION")
+  @@map("ai_assistant_chats")
+}
+
+// White-label Configuration
+model WhiteLabelConfig {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  companyId      String   @unique @db.Uuid
+  logoUrl        String?
+  primaryColor   String?  @db.VarChar(7) // Hex color
+  secondaryColor String?  @db.VarChar(7)
+  companyName    String?  @db.VarChar(255)
+  domain         String?  @unique @db.VarChar(255) // Custom domain
+  customCss      String?  @db.Text
+  isActive       Boolean  @default(false)
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  company Company @relation(fields: [companyId], references: [id], onDelete: Cascade)
+
+  @@map("white_label_configs")
+}
+
+// Role Specification System (S1)
+model RoleSpec {
+  id      String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  version Int            @default(1)
+  status  RoleSpecStatus @default(draft)
+  source  RoleSpecSource @default(new)
+
+  // Basic Info
+  title          String         @db.VarChar(255)
+  department     String?        @db.VarChar(100)
+  seniorityLevel SeniorityLevel
+  location       String?        @db.VarChar(100)
+  employmentType JobType
+  workMode       WorkMode
+
+  // Description
+  jobDescription String @db.Text
+
+  // Skills
+  mustHaveSkills   String[] // Required skills
+  niceToHaveSkills String[] // Preferred skills
+
+  // Metadata
+  clientId           String    @db.Uuid
+  templateId         String?   @db.Uuid // If created from template
+  clonedFromId       String?   @db.Uuid // If cloned from another role
+  lockedAt           DateTime? @db.Timestamp(6)
+  lockedBy           String?   @db.Uuid
+  validatedAt        DateTime? @db.Timestamp(6)
+  evaluationPolicyId String?   @db.Uuid
+
+  // Relations
+  client               User                  @relation("RoleSpecClient", fields: [clientId], references: [id], onDelete: Cascade)
+  lockedByUser         User?                 @relation("RoleSpecLockedBy", fields: [lockedBy], references: [id], onDelete: SetNull)
+  template             RoleSpec?             @relation("RoleSpecTemplate", fields: [templateId], references: [id], onDelete: SetNull)
+  templates            RoleSpec[]            @relation("RoleSpecTemplate")
+  clonedFrom           RoleSpec?             @relation("RoleSpecClone", fields: [clonedFromId], references: [id], onDelete: SetNull)
+  clones               RoleSpec[]            @relation("RoleSpecClone")
+  jobs                 Job[]
+  evaluationPolicy     EvaluationPolicy?     @relation(fields: [evaluationPolicyId], references: [id], onDelete: SetNull)
+  evaluationBlueprints EvaluationBlueprint[]
+  rolePackId           String?               @db.Uuid
+  rolePack             RolePack?             @relation(fields: [rolePackId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@unique([id, version], map: "UQ_ROLE_SPEC_VERSION")
+  @@index([clientId], map: "IDX_ROLE_SPEC_CLIENT")
+  @@index([status], map: "IDX_ROLE_SPEC_STATUS")
+  @@index([templateId], map: "IDX_ROLE_SPEC_TEMPLATE")
+  @@map("role_specs")
+}
+
+model RolePack {
+  id             String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name           String     @db.VarChar(255)
+  description    String?    @db.Text
+  category       String     @db.VarChar(100) // e.g., "Software Engineering", "Sales"
+  isPublic       Boolean    @default(false)
+  isDefault      Boolean    @default(false)
+  organizationId String?    @db.Uuid
+  roleSpecs      RoleSpec[]
+  createdAt      DateTime   @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime   @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([category], map: "IDX_ROLE_PACK_CATEGORY")
+  @@index([organizationId], map: "IDX_ROLE_PACK_ORG")
+  @@map("role_packs")
+}
+
+// Evaluation Policy System (S2)
+model EvaluationPolicy {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+  version     Int     @default(1)
+
+  // Score Weights (must sum to 100)
+  technicalWeight      Float @default(40) // 0-100
+  communicationWeight  Float @default(25) // 0-100
+  problemSolvingWeight Float @default(20) // 0-100
+  culturalFitWeight    Float @default(15) // 0-100
+
+  // Scoring Rules
+  minPassingScore    Float   @default(70) // Minimum overall score to pass
+  scoreNormalization Boolean @default(true) // Normalize scores to 0-100
+
+  // Evidence Requirements
+  requireEvidence             Boolean @default(true) // Require evidence for scores
+  evidenceConfidenceThreshold Float   @default(0.7) // Min confidence for evidence
+
+  // Policy Metadata
+  clientId  String    @db.Uuid
+  isDefault Boolean   @default(false)
+  isActive  Boolean   @default(true)
+  lockedAt  DateTime? @db.Timestamp(6)
+  lockedBy  String?   @db.Uuid
+
+  // Relations
+  client       User       @relation("EvaluationPolicyClient", fields: [clientId], references: [id], onDelete: Cascade)
+  lockedByUser User?      @relation("EvaluationPolicyLockedBy", fields: [lockedBy], references: [id], onDelete: SetNull)
+  roleSpecs    RoleSpec[]
+  jobs         Job[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([clientId], map: "IDX_EVAL_POLICY_CLIENT")
+  @@index([isDefault], map: "IDX_EVAL_POLICY_DEFAULT")
+  @@index([isActive], map: "IDX_EVAL_POLICY_ACTIVE")
+  @@map("evaluation_policies")
+}
+
+// Evidence-Based Scoring (S15)
+model ScoreEvidence {
+  id         String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  scoreId    String @db.VarChar(255) // Reference to score (e.g., "interview_123_overall")
+  scoreType  String @db.VarChar(50) // 'technical', 'communication', 'problemSolving', 'culturalFit', 'overall'
+  scoreValue Float
+
+  // Evidence References
+  evidenceType   String @db.VarChar(50) // 'transcript', 'assessment', 'video', 'audio'
+  evidenceSource String @db.VarChar(100) // 'interview', 'coding_assessment', 'behavioral_test'
+  evidenceId     String @db.Uuid // ID of interview, assessment, etc.
+
+  // Foreign Keys (polymorphic - one will be set based on evidenceSource)
+  interviewId  String? @db.Uuid
+  assessmentId String? @db.Uuid
+
+  // Evidence Snippets
+  transcriptSnippet String? @db.Text // Relevant transcript excerpt
+  timestampStart    Float? // Start time in seconds
+  timestampEnd      Float? // End time in seconds
+
+  // Confidence
+  confidence Float @default(1.0) // 0-1, how confident is this evidence
+
+  // Immutability
+  isImmutable Boolean  @default(true)
+  createdAt   DateTime @default(now()) @db.Timestamp(6)
+
+  // Relations
+  interview  Interview?        @relation("ScoreEvidenceInterview", fields: [interviewId], references: [id], onDelete: Cascade)
+  assessment CodingAssessment? @relation("ScoreEvidenceAssessment", fields: [assessmentId], references: [id], onDelete: Cascade)
+
+  @@index([scoreId], map: "IDX_EVIDENCE_SCORE")
+  @@index([evidenceId], map: "IDX_EVIDENCE_SOURCE")
+  @@index([scoreType], map: "IDX_EVIDENCE_TYPE")
+  @@map("score_evidence")
+}
+
+// Certified Profile System (S17)
+model CertifiedProfile {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId String @db.Uuid
+  jobId       String @db.Uuid
+
+  // Certification Data (Read-only after certification)
+  scores            Json // Immutable scores
+  evidenceSummary   Json // Summary of evidence
+  ranking           Int // Position in ranking
+  rankingSnapshotId String? @db.Uuid
+
+  // Certification Metadata
+  status      ProfileCertificationStatus @default(pending)
+  certifiedAt DateTime?                  @db.Timestamp(6)
+  certifiedBy String?                    @db.Uuid
+  expiresAt   DateTime?                  @db.Timestamp(6)
+
+  // Relations
+  candidate       Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job             Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  certifiedByUser User?     @relation("CertifiedProfileCertifiedBy", fields: [certifiedBy], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@unique([candidateId, jobId], map: "UQ_CERT_PROFILE_CANDIDATE_JOB")
+  @@index([candidateId], map: "IDX_CERT_PROFILE_CANDIDATE")
+  @@index([jobId], map: "IDX_CERT_PROFILE_JOB")
+  @@index([status], map: "IDX_CERT_PROFILE_STATUS")
+  @@map("certified_profiles")
+}
+
+// Skill Taxonomy System (S4)
+model SkillTaxonomy {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  preferredLabel String   @db.VarChar(255) // Canonical skill name
+  aliases        String[] // Alternative names
+  category       String   @db.VarChar(100) // e.g., "Programming Languages", "Frameworks"
+  description    String?  @db.Text
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamp(6)
+  updatedAt      DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@unique([preferredLabel], map: "UQ_SKILL_PREFERRED_LABEL")
+  @@index([category], map: "IDX_SKILL_CATEGORY")
+  @@map("skill_taxonomy")
+}
+
+// Evaluation Blueprint System (S5)
+model EvaluationBlueprint {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name        String  @db.VarChar(255)
+  description String? @db.Text
+  version     Int     @default(1)
+
+  // Blueprint Structure
+  questionMappings Json // Maps questions to evaluation criteria
+  skillMappings    Json // Maps skills to questions
+  scoringRules     Json // Rules for how to score responses
+
+  // Metadata
+  clientId   String  @db.Uuid
+  roleSpecId String? @db.Uuid
+  isDefault  Boolean @default(false)
+  isActive   Boolean @default(true)
+
+  // Relations
+  client     User        @relation("EvaluationBlueprintClient", fields: [clientId], references: [id], onDelete: Cascade)
+  roleSpec   RoleSpec?   @relation(fields: [roleSpecId], references: [id], onDelete: SetNull)
+  interviews Interview[]
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  @@index([clientId], map: "IDX_BLUEPRINT_CLIENT")
+  @@index([roleSpecId], map: "IDX_BLUEPRINT_ROLE_SPEC")
+  @@map("evaluation_blueprints")
+}
+
+// Enhanced Ranking System (S16)
+model RankingSnapshot {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId        String   @db.Uuid
+  snapshotDate DateTime @default(now()) @db.Timestamp(6)
+
+  // Ranking Data (Immutable)
+  rankings        Json // Array of { candidateId, rank, score, evidenceConfidence }
+  totalCandidates Int
+  tieBreaks       Json? // Information about tie-breaking decisions
+
+  // Metadata
+  createdBy String? @db.Uuid
+  isActive  Boolean @default(true) // Only one active snapshot per job
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+
+  @@index([jobId], map: "IDX_RANKING_JOB")
+  @@index([snapshotDate], map: "IDX_RANKING_DATE")
+  @@index([isActive], map: "IDX_RANKING_ACTIVE")
+  @@map("ranking_snapshots")
+}
+
+// Hiring Decision System (S18)
+model HiringDecision {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId String @db.Uuid
+  jobId       String @db.Uuid
+
+  // Decision Data
+  decisionType HiringDecisionType
+  status       HiringDecisionStatus @default(pending)
+  rationale    String               @db.Text // Mandatory rationale
+
+  // Metadata
+  madeBy      String   @db.Uuid
+  madeAt      DateTime @default(now()) @db.Timestamp(6)
+  overridesAI Boolean  @default(false) // Whether decision overrides AI recommendation
+
+  // Relations
+  candidate  Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job        Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  madeByUser User      @relation("HiringDecisionMadeBy", fields: [madeBy], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamp(6)
+  updatedAt DateTime @default(now()) @updatedAt @db.Timestamp(6)
+
+  feedback CandidateFeedback[]
+
+  @@unique([candidateId, jobId], map: "UQ_DECISION_CANDIDATE_JOB")
+  @@index([candidateId], map: "IDX_DECISION_CANDIDATE")
+  @@index([jobId], map: "IDX_DECISION_JOB")
+  @@index([status], map: "IDX_DECISION_STATUS")
+  @@map("hiring_decisions")
+}
+
+// Candidate Feedback System (S19)
+model FeedbackTemplate {
+  id            String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name          String              @db.VarChar(255)
+  description   String?
+  outcomeType   FeedbackOutcomeType
+  template      String              @db.Text // Template with variables like {{candidateName}}, {{jobTitle}}, {{scores}}
+  includeScores Boolean             @default(false)
+  isDefault     Boolean             @default(false)
+  isActive      Boolean             @default(true)
+  clientId      String?             @db.Uuid
+  companyId     String?             @db.Uuid
+  createdAt     DateTime            @default(now()) @db.Timestamp(6)
+  updatedAt     DateTime            @default(now()) @updatedAt @db.Timestamp(6)
+
+  client    User?               @relation("FeedbackTemplateClient", fields: [clientId], references: [id], onDelete: Cascade)
+  company   Company?            @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  feedbacks CandidateFeedback[]
+  jobs      Job[]               @relation("JobFeedbackTemplate")
+
+  @@index([clientId])
+  @@index([companyId])
+  @@index([outcomeType])
+  @@index([isActive])
+  @@map("feedback_templates")
+}
+
+model CandidateFeedback {
+  id                   String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId          String                   @db.Uuid
+  jobId                String?                  @db.Uuid
+  interviewId          String?                  @db.Uuid
+  hiringDecisionId     String?                  @db.Uuid
+  templateId           String?                  @db.Uuid
+  outcomeType          FeedbackOutcomeType
+  content              String                   @db.Text // Final feedback content
+  includeScores        Boolean                  @default(false)
+  scores               Json? // Scores if included
+  deliveryMethod       FeedbackDeliveryMethod[] @default([])
+  sentAt               DateTime?
+  sentViaEmail         Boolean                  @default(false)
+  sentViaInApp         Boolean                  @default(false)
+  emailSentAt          DateTime?
+  inAppSentAt          DateTime?
+  requestedByCandidate Boolean                  @default(false)
+  requestedAt          DateTime?
+  status               FeedbackStatus           @default(draft)
+  createdBy            String                   @db.Uuid
+  createdAt            DateTime                 @default(now()) @db.Timestamp(6)
+  updatedAt            DateTime                 @default(now()) @updatedAt @db.Timestamp(6)
+
+  candidate      Candidate         @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+  job            Job?              @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  interview      Interview?        @relation(fields: [interviewId], references: [id], onDelete: Cascade)
+  hiringDecision HiringDecision?   @relation(fields: [hiringDecisionId], references: [id], onDelete: Cascade)
+  template       FeedbackTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  createdByUser  User              @relation("FeedbackCreatedBy", fields: [createdBy], references: [id], onDelete: Cascade)
+
+  @@index([candidateId])
+  @@index([jobId])
+  @@index([interviewId])
+  @@index([hiringDecisionId])
+  @@index([status])
+  @@index([outcomeType])
+  @@map("candidate_feedback")
 }

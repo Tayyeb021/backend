@@ -3,7 +3,9 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MatchingService } from '../sourcing/services/matching.service';
 import { InterviewService } from '../interview/interview.service';
 import { EmailService } from '../email/email.service';
-import { InterviewLanguage, InterviewType, CandidateStatus } from '@prisma/client';
+import { InterviewLanguage, InterviewType, CandidateStatus, UserRole } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
+import { generateSecurePassword } from '../candidates/utils/password.utils';
 
 interface DateOption {
   date: string; // ISO string
@@ -133,12 +135,43 @@ export class JobsAutoInviteService {
 
         // Send email invitation with 3 date options
         if (candidate.email) {
+          // Check if User account exists for this candidate
+          let user = await this.prisma.user.findUnique({
+            where: { email: candidate.email },
+          });
+
+          let generatedPassword: string | undefined;
+
+          // If no User account exists, create one with auto-generated password
+          if (!user) {
+            generatedPassword = generateSecurePassword();
+            const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+            
+            user = await this.prisma.user.create({
+              data: {
+                email: candidate.email,
+                password: hashedPassword,
+                firstName: candidate.firstName,
+                lastName: candidate.lastName,
+                phone: candidate.phone,
+                role: UserRole.interviewee,
+                isActive: true,
+              },
+            });
+          }
+
+          // Check if candidate has resume
+          const hasResume = !!candidate.resumeUrl;
+          
           await this.emailService.sendInterviewInvitationWithDates(
             candidate.email,
             candidate.firstName,
             job.title,
             interview.id,
             dateOptions.map((opt) => opt.date),
+            candidate.id, // Pass candidateId for token generation
+            candidate.resumeUrl, // Pass resumeUrl to check if resume exists
+            generatedPassword, // Pass generated password if user was just created
           );
 
           // Update candidate status

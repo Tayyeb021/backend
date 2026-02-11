@@ -107,4 +107,12 @@ export class CreateJobDto {
   @IsDateString()
   @IsOptional()
   expiresAt?: string;
+
+  @IsString()
+  @IsOptional()
+  roleSpecId?: string;
+
+  @IsString()
+  @IsOptional()
+  evaluationPolicyId?: string;
 }

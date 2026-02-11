@@ -1,16 +1,23 @@
-import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Inject, forwardRef } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { Job, JobStatus, Prisma } from '@prisma/client';
+import { Job, JobStatus, Prisma, CandidateStatus, InterviewLanguage, InterviewType, UserRole, ExperienceLevel, EngagementType } from '@prisma/client';
 import { CreateJobDto } from './dto/create-job.dto';
 import { UpdateJobDto } from './dto/update-job.dto';
 import { JobQueryDto } from './dto/job-query.dto';
 import { JobsAutoInviteService } from './jobs-auto-invite.service';
+import { InterviewService } from '../interview/interview.service';
+import { EmailService } from '../email/email.service';
+import * as bcrypt from 'bcrypt';
+import { generateSecurePassword } from '../candidates/utils/password.utils';
 
 @Injectable()
 export class JobsService {
   constructor(
     private prisma: PrismaService,
     private autoInviteService: JobsAutoInviteService,
+    @Inject(forwardRef(() => InterviewService))
+    private interviewService: InterviewService,
+    private emailService: EmailService,
   ) {}
 
   async createJob(createJobDto: CreateJobDto, clientId: string): Promise<Job> {
@@ -64,6 +71,78 @@ export class JobsService {
     }
 
     return job;
+  }
+
+  /**
+   * Create a job from a locked Role Specification
+   * Auto-populates fields from role spec and links evaluation policy
+   */
+  async createJobFromRoleSpec(
+    roleSpecId: string,
+    clientId: string,
+    overrides?: Partial<CreateJobDto>,
+  ): Promise<Job> {
+    // Get role spec with evaluation policy
+    const roleSpec = await this.prisma.roleSpec.findUnique({
+      where: { id: roleSpecId },
+      include: {
+        evaluationPolicy: true,
+        client: true,
+      },
+    });
+
+    if (!roleSpec) {
+      throw new NotFoundException('Role specification not found');
+    }
+
+    // Verify role spec belongs to the client
+    if (roleSpec.clientId !== clientId) {
+      throw new ForbiddenException('You can only create jobs from your own role specifications');
+    }
+
+    // Only allow creating jobs from locked role specs
+    if (roleSpec.status !== 'locked') {
+      throw new BadRequestException(
+        'Can only create jobs from locked role specifications. Please lock the role spec first.',
+      );
+    }
+
+    // Auto-populate job data from role spec
+    const jobData: CreateJobDto = {
+      title: overrides?.title || roleSpec.title,
+      description: overrides?.description || roleSpec.jobDescription,
+      requiredSkills: overrides?.requiredSkills || [
+        ...roleSpec.mustHaveSkills,
+        ...(roleSpec.niceToHaveSkills || []),
+      ],
+      seniorityLevel: overrides?.seniorityLevel || roleSpec.seniorityLevel,
+      experienceLevel: (overrides?.experienceLevel || this.mapSeniorityToExperience(roleSpec.seniorityLevel)) as ExperienceLevel,
+      jobType: overrides?.jobType || roleSpec.employmentType,
+      engagementLength: (overrides?.engagementLength || EngagementType.long_term) as EngagementType, // Default to long_term
+      workMode: overrides?.workMode || roleSpec.workMode,
+      country: overrides?.country || roleSpec.location || undefined,
+      evaluationPolicyId: overrides?.evaluationPolicyId || roleSpec.evaluationPolicyId || undefined,
+      roleSpecId: roleSpecId, // Link to role spec
+      ...overrides, // Allow manual overrides (these will override the above)
+    };
+
+    // Create the job using existing createJob method
+    const job = await this.createJob(jobData, clientId);
+
+    return job;
+  }
+
+  /**
+   * Map seniority level to experience level
+   */
+  private mapSeniorityToExperience(seniorityLevel: string): ExperienceLevel {
+    const mapping: Record<string, ExperienceLevel> = {
+      junior: ExperienceLevel.one_to_three,
+      mid: ExperienceLevel.three_to_five,
+      senior: ExperienceLevel.five_plus,
+      expert: ExperienceLevel.five_plus,
+    };
+    return mapping[seniorityLevel] || ExperienceLevel.three_to_five;
   }
 
   async getJobsByClient(
@@ -442,5 +521,164 @@ export class JobsService {
       daysAhead: options.daysAhead,
       maxCandidates: options.maxCandidates,
     });
+  }
+
+  async inviteByEmail(
+    jobId: string,
+    clientId: string,
+    body: {
+      email: string;
+      firstName?: string;
+      lastName?: string;
+      externalMeetingUrl?: string;
+      language?: string;
+      type?: string;
+    },
+  ) {
+    // Validate job exists and user has access
+    const job = await this.prisma.job.findUnique({
+      where: { id: jobId },
+    });
+
+    if (!job) {
+      throw new NotFoundException('Job not found');
+    }
+
+    if (job.clientId !== clientId) {
+      throw new ForbiddenException('You do not have permission to invite candidates for this job');
+    }
+
+    // Find candidate by email (email is unique globally)
+    let candidate = await this.prisma.candidate.findUnique({
+      where: {
+        email: body.email,
+      },
+    });
+
+    // Check if User account exists for this email
+    let user = await this.prisma.user.findUnique({
+      where: { email: body.email },
+    });
+
+    let generatedPassword: string | undefined;
+
+    // If no User account exists, create one with auto-generated password
+    if (!user) {
+      generatedPassword = generateSecurePassword();
+      const hashedPassword = await bcrypt.hash(generatedPassword, 10);
+      
+      user = await this.prisma.user.create({
+        data: {
+          email: body.email,
+          password: hashedPassword,
+          firstName: body.firstName || 'Candidate',
+          lastName: body.lastName || '',
+          phone: null,
+          role: UserRole.interviewee,
+          isActive: true,
+        },
+      });
+    }
+
+    if (!candidate) {
+      // Create new candidate for this job
+      candidate = await this.prisma.candidate.create({
+        data: {
+          email: body.email,
+          firstName: body.firstName || 'Candidate',
+          lastName: body.lastName || '',
+          jobId: jobId,
+          skills: [],
+          status: CandidateStatus.sourced,
+        },
+      });
+    } else {
+      // Candidate exists - update their info and jobId if needed
+      const updateData: any = {};
+      
+      if (body.firstName) {
+        updateData.firstName = body.firstName;
+      }
+      if (body.lastName) {
+        updateData.lastName = body.lastName;
+      }
+      
+      // Update jobId if candidate is not already associated with this job
+      if (candidate.jobId !== jobId) {
+        updateData.jobId = jobId;
+      }
+
+      if (Object.keys(updateData).length > 0) {
+        candidate = await this.prisma.candidate.update({
+          where: { id: candidate.id },
+          data: updateData,
+        });
+      }
+    }
+
+    // Generate date options (3, 5, 7 days from now)
+    const daysAhead = [3, 5, 7];
+    const dateOptions: Array<{ date: string; selected: boolean }> = daysAhead.map((days) => {
+      const date = new Date();
+      date.setDate(date.getDate() + days);
+      date.setHours(10, 0, 0, 0); // Set to 10 AM
+      return {
+        date: date.toISOString(),
+        selected: false,
+      };
+    });
+
+    // Create interview
+    const interview = await this.interviewService.createInterview(
+      {
+        candidateId: candidate.id,
+        jobId: job.id,
+        language: (body.language as InterviewLanguage) || InterviewLanguage.en,
+        type: (body.type as InterviewType) || InterviewType.live,
+        allowSelfScheduling: true,
+        deadline: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000), // 14 days from now
+        externalMeetingUrl: body.externalMeetingUrl,
+      },
+      clientId,
+    );
+
+    // Update interview with date options
+    await this.prisma.interview.update({
+      where: { id: interview.id },
+      data: {
+        dateOptions: dateOptions as any,
+        invitationSentAt: new Date(),
+      },
+    });
+
+    // Send email invitation with date options
+    const candidateName = `${candidate.firstName} ${candidate.lastName}`.trim() || 'Candidate';
+    
+    // Check if candidate has resume
+    const hasResume = !!candidate.resumeUrl;
+    
+    await this.emailService.sendInterviewInvitationWithDates(
+      candidate.email,
+      candidateName,
+      job.title,
+      interview.id,
+      dateOptions.map((opt) => opt.date),
+      candidate.id, // Pass candidateId for token generation
+      candidate.resumeUrl, // Pass resumeUrl to check if resume exists
+      generatedPassword, // Pass generated password if user was just created
+    );
+
+    // Update candidate status
+    await this.prisma.candidate.update({
+      where: { id: candidate.id },
+      data: { status: CandidateStatus.contacted },
+    });
+
+    return {
+      message: 'Invitation sent successfully',
+      candidateId: candidate.id,
+      interviewId: interview.id,
+      candidateName: `${candidate.firstName} ${candidate.lastName}`,
+    };
   }
 }
