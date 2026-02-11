@@ -89,7 +89,7 @@ ${context?.candidateName ? `**Candidate:** ${context.candidateName}` : ''}
 ${context?.candidateSkills && context.candidateSkills.length > 0 ? `**Candidate Skills:** ${context.candidateSkills.join(', ')}` : ''}
 ${context?.candidateResume ? `**Candidate Background:** ${context.candidateResume}` : ''}
 
-**Naming:** When greeting or addressing the candidate, always use their actual name (${context?.candidateName ?? 'the candidate'}). Never use placeholders like [Candidate Name] or [Interviewer Name]. You are the AI interviewer; do not introduce yourself with a fake name.
+**Naming:** When greeting or addressing the candidate, always use their actual name (${context?.candidateName ?? 'the candidate'}). Never use placeholders such as [Candidate Name], [Interviewer Name], or "I will use a generic name". Do not introduce yourself by name; say only "I'll be conducting your interview today" or similar. Never write or speak bracketed placeholders.
 
 **Interview Strategy:**
 - Start with warm-up questions to make the candidate comfortable
@@ -201,24 +201,32 @@ Remember: You are representing the company, so be professional, respectful, and 
     }
   }
 
+  /**
+   * Process a Gemini stream chunk. If accumulator is provided, append text to it (for one emit at stream end).
+   * Otherwise emit each part immediately (legacy).
+   */
   private processGeminiResponse(
     response: any,
     session: GeminiRealtimeSession,
+    accumulator?: string[],
   ): void {
     if (response.candidates && response.candidates.length > 0) {
       const candidate = response.candidates[0];
       if (candidate.finishReason === 'SAFETY' || candidate.finishReason === 'RECITATION') return;
 
-      // Extract text transcript (streaming sends partial text in parts)
       if (candidate.content?.parts) {
         for (const part of candidate.content.parts) {
           if (part.text) {
-            console.log('[Gemini] Emitting AI text:', part.text.slice(0, 80) + (part.text.length > 80 ? '...' : ''));
-            session.onTranscript({
-              text: part.text,
-              timestamp: Date.now(),
-              language: 'en',
-            });
+            if (accumulator) {
+              accumulator.push(part.text);
+            } else {
+              console.log('[Gemini] Emitting AI text:', part.text.slice(0, 80) + (part.text.length > 80 ? '...' : ''));
+              session.onTranscript({
+                text: part.text,
+                timestamp: Date.now(),
+                language: 'en',
+              });
+            }
           }
           if (part.inlineData?.data) {
             const audioBuffer = Buffer.from(part.inlineData.data, 'base64');
@@ -294,7 +302,8 @@ Remember: You are representing the company, so be professional, respectful, and 
               {
                 text: `You are an AI interviewer conducting a professional technical interview. 
                 Your role is to assess the candidate's technical skills, problem-solving abilities, communication, and cultural fit.
-                ${session.candidateName ? `The candidate's name is ${session.candidateName}. Always use it when greeting or addressing them. Never use placeholders like [Candidate Name] or [Interviewer Name].` : 'Never use placeholders like [Candidate Name] or [Interviewer Name].'}
+                ${session.candidateName ? `The candidate's name is ${session.candidateName}. Always use it when greeting or addressing them.` : ''}
+                Do not use placeholders or bracketed text like [Interviewer Name] or [Candidate Name]. Do not say "I will use a generic name". Do not introduce yourself by name; say only "I'll be conducting your interview today" or similar.
                 
                 Guidelines:
                 - Speak naturally in English
@@ -325,7 +334,8 @@ Remember: You are representing the company, so be professional, respectful, and 
         },
       );
 
-      // Process streaming response: Gemini may send SSE (data: {...}) or raw JSON lines; JSON can span lines
+      // Accumulate streamed text and emit one ai-message at end so frontend gets full reply (no stuck first chunk)
+      const textAccumulator: string[] = [];
       let buffer = '';
       let chunkCount = 0;
 
@@ -357,7 +367,7 @@ Remember: You are representing the company, so be professional, respectful, and 
         return -1;
       };
 
-      const extractAndProcess = (s: string): string => {
+      const extractAndProcess = (s: string, acc: string[]): string => {
         let rest = s.trimStart();
         while (rest.length) {
           const dataIdx = rest.indexOf('data:');
@@ -386,7 +396,7 @@ Remember: You are representing the company, so be professional, respectful, and 
           }
           if (payloadStr) {
             const payload = tryParsePayload(payloadStr);
-            if (payload) this.processGeminiResponse(payload, session);
+            if (payload) this.processGeminiResponse(payload, session, acc);
             rest = rest.slice(skip).trimStart();
           } else if (skip > 0) {
             rest = rest.slice(skip).trimStart();
@@ -404,10 +414,18 @@ Remember: You are representing the company, so be professional, respectful, and 
         if (chunkCount <= 3) {
           console.log('[Gemini] stream chunk', chunkCount, 'length', str.length, 'bufferLen', buffer.length);
         }
-        buffer = extractAndProcess(buffer);
+        buffer = extractAndProcess(buffer, textAccumulator);
       });
       response.data.on('end', () => {
-        if (buffer.trim()) extractAndProcess(buffer);
+        if (buffer.trim()) extractAndProcess(buffer, textAccumulator);
+        const fullText = textAccumulator.join('').trim();
+        if (fullText) {
+          session.onTranscript({
+            text: fullText,
+            timestamp: Date.now(),
+            language: 'en',
+          });
+        }
         console.log('[Gemini] stream end, total chunks', chunkCount);
       });
       response.data.on('error', (err: Error) => {

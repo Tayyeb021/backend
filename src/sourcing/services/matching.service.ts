@@ -212,7 +212,7 @@ export class MatchingService {
 
     try {
       // Use Gemini to analyze cultural fit from transcript
-      const model = this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+      const model = this.genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || 'gemini-2.0-flash' });
       const prompt = `Analyze the cultural fit of a candidate based on their interview transcript.
   
   Job Description: ${jobDescription}

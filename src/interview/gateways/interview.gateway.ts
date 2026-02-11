@@ -149,6 +149,9 @@ export class InterviewGateway
       }
       if (existingSession && !hadDisconnectTimer) {
         client.emit('interview-started', { success: true });
+        // Re-send first question so frontend can show it if they missed it (e.g. "AI not starting")
+        const firstQ = existingSession.templateQuestions?.[0]?.question ?? 'Tell me about yourself and your relevant experience.';
+        client.emit('ai-message', { message: `Hello, thank you for joining. ${firstQ}` });
         return;
       }
 
@@ -241,10 +244,8 @@ export class InterviewGateway
 
       client.emit('interview-started', { success: true });
 
-      // Clear "Waiting for AI" immediately with a short placeholder; real AI response will follow
-      client.emit('ai-message', { message: 'Starting the interview...' });
-
-      // Trigger AI to speak first: greet by name and ask the first question
+      // Send first AI message as soon as possible so frontend does not stay on "Waiting for AI to start"
+      // First reply: OpenAI then Gemini (so interview starts even if Gemini fails)
       const firstQuestionText =
         templateQuestions.length > 0
           ? templateQuestions[0].question
@@ -252,13 +253,32 @@ export class InterviewGateway
       const initialPrompt = candidateName && candidateName !== 'Candidate'
         ? `The candidate ${candidateName} has just joined the interview. Greet them by name (${candidateName}) briefly in one sentence, then ask this first question: "${firstQuestionText}"`
         : `The candidate has just joined the interview. Greet them briefly in one sentence, then ask this first question: "${firstQuestionText}"`;
-      this.geminiRealtimeService
-        .sendText(geminiSession, initialPrompt)
-        .catch((err) => {
-          console.error('Failed to trigger AI first question:', err);
-          client.emit('error', { message: 'AI could not start the interview' });
-        });
+
+      let firstReplyText: string;
+      try {
+        const replyResult = await this.aiRouter.getNextReply(
+          initialPrompt,
+          data.language,
+          geminiSession,
+        );
+        firstReplyText = replyResult?.text?.trim() || `Hello${candidateName && candidateName !== 'Candidate' ? ` ${candidateName}` : ''}. ${firstQuestionText}`;
+      } catch (err: any) {
+        console.error('AI first question failed (OpenAI + Gemini fallback):', err);
+        firstReplyText = `Hello${candidateName && candidateName !== 'Candidate' ? ` ${candidateName}` : ''}. ${firstQuestionText}`;
+      }
+      client.emit('ai-message', { message: firstReplyText });
+
+      // Optional: have Gemini speak the same text (TTS)
+      const sayPrompt = `Say exactly the following to the candidate. Do not add anything else: ${firstReplyText}`;
+      this.geminiRealtimeService.sendText(geminiSession, sayPrompt).catch((err) => {
+        console.warn('Gemini TTS for first question failed (text already shown):', err?.message);
+      });
     } catch (error: any) {
+      console.error('[Interview start failed]', error?.message ?? error);
+      client.emit('interview-started', { success: true });
+      client.emit('ai-message', {
+        message: 'Welcome. Please tell me about yourself and your relevant experience.',
+      });
       client.emit('error', { message: error?.message ?? 'Interview start failed' });
     }
   }
@@ -332,17 +352,33 @@ export class InterviewGateway
         return;
       }
 
-      const currentQuestion = session.templateQuestions?.[session.currentQuestionIndex ?? 0];
-      if (currentQuestion) {
-        const analysis = await this.aiRouter.evaluateResponse(currentQuestion.question, text);
-        client.emit('response-quality', analysis);
-      }
-
       const questions = session.templateQuestions ?? [];
       const idx = session.currentQuestionIndex ?? 0;
       const nextIndex = idx + 1;
       const hasNextTemplate = nextIndex < questions.length;
       const nextQuestion = hasNextTemplate ? questions[nextIndex] : null;
+      const currentQuestion = session.templateQuestions?.[idx];
+
+      // Advance to next question and update UI immediately so user sees "next question" right after answering
+      if (hasNextTemplate) {
+        session.currentQuestionIndex = nextIndex;
+        client.emit('current-question', {
+          question: nextQuestion!,
+          index: nextIndex,
+          total: questions.length,
+        });
+        client.emit('question-completed', { questionIndex: idx });
+      }
+
+      // Response quality in background so it doesn't block the next question
+      if (currentQuestion) {
+        this.aiRouter.evaluateResponse(currentQuestion.question, text).then((analysis) => {
+          client.emit('response-quality', analysis);
+        }).catch((err) => {
+          console.warn('evaluateResponse failed:', err?.message);
+        });
+      }
+
       const resumeCount = session.resumeFollowUpCount ?? 0;
       const canAskResumeFollowUp =
         !hasNextTemplate &&
@@ -366,30 +402,43 @@ export class InterviewGateway
         promptForAI = `The candidate just answered this question: "${currentQuestion?.question ?? 'the question'}". Their answer: "${text}". Briefly acknowledge their answer, then thank them and conclude the interview (say we're done and thank them for their time). Say this only once.`;
       }
 
-      if (hasNextTemplate) {
-        session.currentQuestionIndex = nextIndex;
-      }
-      if (hasNextTemplate && nextQuestion) {
-        client.emit('current-question', {
-          question: nextQuestion,
-          index: nextIndex,
-          total: questions.length,
-        });
-        client.emit('question-completed', { questionIndex: idx });
-      }
+      const isConclusion = !hasNextTemplate && !canAskResumeFollowUp;
 
-      const replyResult = await this.aiRouter.getNextReply(
-        promptForAI,
-        session.language,
-        session.geminiSession,
-      );
-      // Use Gemini to speak the reply (TTS); stream will emit ai-message via onTranscript
-      const sayPrompt = `Say exactly the following to the candidate. Do not add anything else: ${replyResult.text}`;
+      let nextReplyText: string;
+      try {
+        const replyResult = await this.aiRouter.getNextReply(
+          promptForAI,
+          session.language,
+          session.geminiSession,
+        );
+        nextReplyText = replyResult?.text?.trim() || '';
+      } catch (err: any) {
+        console.error('getNextReply failed:', err?.message);
+        nextReplyText =
+          hasNextTemplate && nextQuestion
+            ? `Thank you. ${nextQuestion.question}`
+            : canAskResumeFollowUp
+              ? 'Thank you. Could you tell me more about your relevant experience?'
+              : 'Thank you for your answer. That concludes our interview—we appreciate your time.';
+      }
+      if (!nextReplyText) {
+        nextReplyText =
+          hasNextTemplate && nextQuestion
+            ? `Thank you. ${nextQuestion.question}`
+            : 'Thank you. Could you tell me more about your experience?';
+      }
+      // Emit next question to client immediately so UI advances (do not wait for TTS)
+      client.emit('ai-message', { message: nextReplyText });
+      if (isConclusion) {
+        client.emit('interview-concluded', { message: 'Interview concluded. Ending automatically.' });
+      }
+      // Optional: have Gemini speak it
+      const sayPrompt = `Say exactly the following to the candidate. Do not add anything else: ${nextReplyText}`;
       this.geminiRealtimeService.sendText(session.geminiSession, sayPrompt).catch((error) => {
-        console.error('Gemini TTS error:', error);
-        client.emit('ai-message', { message: replyResult.text });
+        console.warn('Gemini TTS error:', error?.message);
       });
     } catch (error: any) {
+      console.error('handleTranscribeNow error:', error?.message);
       client.emit('error', { message: error?.message ?? 'Transcription failed' });
     }
   }

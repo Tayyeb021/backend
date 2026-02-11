@@ -59,6 +59,9 @@ export class DailyService {
             exp:
               properties?.exp || Math.floor(Date.now() / 1000) + 60 * 60 * 24, // 24 hours
             user_id: userId,
+            enable_prejoin_ui: true, // Show lobby so user clicks "Join" before the interview starts
+            start_video_off: false,
+            start_audio_off: false,
           },
         },
         {
