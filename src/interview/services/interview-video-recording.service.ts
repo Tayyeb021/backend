@@ -165,8 +165,11 @@ export class InterviewVideoRecordingService {
     // This ensures only one video exists per interview
     await this.deleteAllCompleteVideos(interviewId);
     
+    // Determine file extension based on mime type
+    const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+    
     // Always use a consistent key format (without timestamp) to ensure only one video per interview
-    const key = `live-interviews/${interviewId}/complete/interview.webm`;
+    const key = `live-interviews/${interviewId}/complete/interview.${extension}`;
 
     let lastError: any;
     
